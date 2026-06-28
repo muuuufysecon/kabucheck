@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>高配当株 長期保有サポート</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+<div id="app" class="max-w-5xl mx-auto p-4">
+  <header class="flex items-center justify-between mb-4">
+    <h1 class="text-2xl font-bold">📈 高配当株 長期保有サポート</h1>
+    <span id="envBadge" class="text-xs px-2 py-1 rounded bg-slate-200"></span>
+  </header>
+
+  <nav class="flex gap-2 mb-4 flex-wrap">
+    <button class="tab-btn px-3 py-2 bg-white border rounded" data-tab="home">🏠 ホーム</button>
+    <button class="tab-btn px-3 py-2 bg-white border rounded" data-tab="stock">🔍 銘柄</button>
+    <button class="tab-btn px-3 py-2 bg-white border rounded" data-tab="watch">⭐ ウォッチ</button>
+    <button class="tab-btn px-3 py-2 bg-white border rounded" data-tab="portfolio">💼 ポートフォリオ</button>
+    <button class="tab-btn px-3 py-2 bg-white border rounded" data-tab="settings">⚙️ 設定</button>
+  </nav>
+
+  <main id="main"></main>
+  <footer class="text-xs text-slate-400 mt-8 text-center">
+    ⚠️ 本アプリは情報提供のみを目的とし、投資判断は自己責任です。
+  </footer>
+</div>
+
+<script>
+/* ========== 環境設定（試験用は _TEST に変更） ========== */
+const ENV_SUFFIX = '_PROD';
+const DB_NAME = `StockAdvisorDB${ENV_SUFFIX}`;
+const DB_VERSION = 1;
+const STORES = ['auth','apiKeys','watchlist','portfolio','cache_financials','cache_dividends','cache_prices','ai_memos'];
+document.getElementById('envBadge').textContent = `env: ${ENV_SUFFIX}`;
+
+/* ========== IndexedDB ========== */
+let _db;
+function openDB(){
+  return new Promise((res,rej)=>{
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      STORES.forEach(s => { if(!db.objectStoreNames.contains(s)) db.createObjectStore(s); });
+    };
+    req.onsuccess = () => { _db = req.result; res(_db); };
+    req.onerror = () => rej(req.error);
+  });
+}
+async function put(store, key, val){
+  const db = _db || await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(store,'readwrite');
+    tx.objectStore(store).put(val, key);
+    tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+  });
+}
+async function get(store, key){
+  const db = _db || await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(store,'readonly');
+    const r = tx.objectStore(store).get(key);
+    r.onsuccess = ()=>res(r.result); r.onerror = ()=>rej(r.error);
+  });
+}
+async function getAll(store){
+  const db = _db || await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(store,'readonly');
+    const r = tx.objectStore(store).getAll();
+    const k = tx.objectStore(store).getAllKeys();
+    r.onsuccess = ()=>{ k.onsuccess = ()=>res({keys:k.result, values:r.result}); };
+    r.onerror = ()=>rej(r.error);
+  });
+}
+async function del(store, key){
+  const db = _db || await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(store,'readwrite');
+    tx.objectStore(store).delete(key);
+    tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+  });
+}
+
+/* ========== 永続化申請 ========== */
+async function requestPersist(){
+  if(navigator.storage?.persist){
+    try { return await navigator.storage.persist(); } catch(e){ return false; }
+  }
+  return false;
+}
+
+/* ========== J-Quants API ========== */
+const JQ_BASE = 'https://api.jquants.com/v1';
+async function jqLogin(email, password){
+  const r1 = await fetch(`${JQ_BASE}/token/auth_user`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({mailaddress:email, password})
+  });
+  if(!r1.ok) throw new Error('ログイン失敗（メール/パスワードを確認）');
+  const {refreshToken} = await r1.json();
+  await put('auth','refreshToken', refreshToken);
+  await refreshIdToken();
+  return true;
+}
+async function refreshIdToken(){
+  const rt = await get('auth','refreshToken');
+  if(!rt) throw new Error('未ログイン');
+  const r = await fetch(`${JQ_BASE}/token/auth_refresh?refreshtoken=${encodeURIComponent(rt)}`,{method:'POST'});
+  if(!r.ok) throw new Error('IDトークン取得失敗');
+  const {idToken} = await r.json();
+  await put('auth','idToken', idToken);
+  await put('auth','idTokenAt', Date.now());
+  return idToken;
+}
+async function jqFetch(path){
+  let idToken = await get('auth','idToken');
+  const at = await get('auth','idTokenAt') || 0;
+  if(!idToken || Date.now() - at > 23*3600*1000) idToken = await refreshIdToken();
+  const r = await fetch(`${JQ_BASE}${path}`, { headers:{Authorization:`Bearer ${idToken}`}});
+  if(r.status === 401){ idToken = await refreshIdToken();
+    return fetch(`${JQ_BASE}${path}`,{headers:{Authorization:`Bearer ${idToken}`}}).then(x=>x.json());
+  }
+  return r.json();
+}
+
+/* ========== Stooq 株価 ========== */
+async function stooqLatest(code){
+  // 例：7203 → 7203.jp
+  const url = `https://stooq.com/q/d/l/?s=${code}.jp&i=d`;
+  const res = await fetch(url);
+  const text = await res.text();
+  const lines = text.trim().split(/\r?\n/);
+  if(lines.length < 2) return null;
+  const last = lines[lines.length-1].split(',');
+  return { date: last[0], close: parseFloat(last[4]) };
+}
+
+/* ========== 指標計算 ========== */
+function calcHealthScore({利回り, 配当性向, 自己資本比率, 連続増配年, CF配当カバー}){
+  let s = 0;
+  // 配当の魅力度 30
+  s += Math.min(30, (利回り ?? 0) * 6);
+  // 配当の持続性 40
+  if(配当性向 != null) s += Math.max(0, 25 - Math.max(0, 配当性向 - 50) * 0.5);
+  if(CF配当カバー != null) s += Math.min(15, CF配当カバー * 7);
+  // 収益安定性 20（自己資本比率で代用）
+  if(自己資本比率 != null) s += Math.min(20, 自己資本比率 * 0.4);
+  // 増配履歴 10
+  s += Math.min(10, (連続増配年 ?? 0) * 2);
+  return Math.round(Math.max(0, Math.min(100, s)));
+}
+function riskFlags(metrics){
+  const flags = [];
+  if(metrics.配当性向 > 80) flags.push('🔴 配当性向80%超');
+  if(metrics.CF配当カバー != null && metrics.CF配当カバー < 1) flags.push('🟠 配当 > 営業CF');
+  if(metrics.自己資本比率 != null && metrics.自己資本比率 < 30) flags.push('🟡 自己資本比率30%未満');
+  if(metrics.連続増配年 === 0) flags.push('🟡 増配履歴なし');
+  return flags;
+}
+
+/* ========== 銘柄分析 ========== */
+async function analyzeStock(code){
+  const code5 = code.length===4 ? code+'0' : code;
+  const fins = await jqFetch(`/fins/statements?code=${code5}`);
+  const divs = await jqFetch(`/fins/dividend?code=${code5}`);
+  const price = await stooqLatest(code);
+  await put('cache_financials', code, {data:fins, at:Date.now()});
+  await put('cache_dividends', code, {data:divs, at:Date.now()});
+  if(price) await put('cache_prices', code, {...price, at:Date.now()});
+
+  const stmts = (fins.statements || []).filter(x => x.TypeOfDocument?.includes('FY'));
+  const latest = stmts[stmts.length-1] || {};
+  const eps = parseFloat(latest.EarningsPerShare) || null;
+  const bps = parseFloat(latest.BookValuePerShare) || null;
+  const dps = parseFloat(latest.ResultDividendPerShareAnnual) || null;
+  const opCF = parseFloat(latest.CashFlowsFromOperatingActivities) || null;
+  const equityRatio = parseFloat(latest.EquityToAssetRatio) ? parseFloat(latest.EquityToAssetRatio)*100 : null;
+
+  const close = price?.close;
+  const per = (close && eps) ? close/eps : null;
+  const pbr = (close && bps) ? close/bps : null;
+  const yieldPct = (close && dps) ? dps/close*100 : null;
+
+  // 配当履歴
+  const divHistory = (divs.dividend || [])
+    .filter(d => d.ReferenceNumber && d.DividendPayableDate)
+    .map(d => ({date:d.DividendPayableDate, amount:parseFloat(d.DividendPayablePerShare)||0}));
+
+  // 配当性向
+  const netIncome = parseFloat(latest.Profit) || null;
+  const totalDiv = parseFloat(latest.ResultTotalDividendPaidAnnual) || null;
+  const payout = (netIncome && totalDiv) ? totalDiv/netIncome*100 : null;
+  const cfCover = (opCF && totalDiv) ? opCF/totalDiv : null;
+
+  // 連続増配年（年次配当の単純判定）
+  const yearly = {};
+  divHistory.forEach(d => { const y = d.date.slice(0,4); yearly[y] = (yearly[y]||0) + d.amount; });
+  const years = Object.keys(yearly).sort();
+  let streak = 0;
+  for(let i = years.length-1; i > 0; i--){
+    if(yearly[years[i]] > yearly[years[i-1]]) streak++; else break;
+  }
+
+  const metrics = {
+    code, close, per, pbr, 利回り:yieldPct, 配当性向:payout,
+    自己資本比率:equityRatio, 連続増配年:streak, CF配当カバー:cfCover, eps, bps, dps
+  };
+  metrics.score = calcHealthScore(metrics);
+  metrics.flags = riskFlags(metrics);
+  metrics.history = divHistory;
+  metrics.yearlyDiv = yearly;
+  return metrics;
+}
+
+/* ========== AI（Gemini BYOK） ========== */
+async function askGemini(prompt){
+  const key = await get('apiKeys','gemini');
+  if(!key) throw new Error('Gemini APIキー未設定');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+  const r = await fetch(url,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({contents:[{parts:[{text:prompt}]}]})
+  });
+  const j = await r.json();
+  return j.candidates?.[0]?.content?.parts?.[0]?.text || '(応答なし)';
+}
+
+/* ========== 楽天証券CSV ========== */
+async function importRakutenCSV(file){
+  const buf = await file.arrayBuffer();
+  const text = new TextDecoder('shift-jis').decode(buf);
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if(lines.length < 2) throw new Error('CSV読み込み失敗');
+  const header = lines[0].split(',').map(s=>s.replace(/"/g,'').trim());
+  const codeIdx = header.findIndex(h => /銘柄コード|コード/.test(h));
+  const nameIdx = header.findIndex(h => /銘柄名|銘柄/.test(h));
+  const qtyIdx  = header.findIndex(h => /保有数|数量/.test(h));
+  const costIdx = header.findIndex(h => /取得単価|平均取得/.test(h));
+  const items = [];
+  for(let i=1;i<lines.length;i++){
+    const cols = lines[i].split(',').map(s=>s.replace(/"/g,'').trim());
+    if(!cols[codeIdx]) continue;
+    items.push({
+      code: cols[codeIdx]?.replace(/[^0-9]/g,''),
+      name: cols[nameIdx],
+      quantity: parseFloat(cols[qtyIdx]?.replace(/,/g,'')) || 0,
+      cost: parseFloat(cols[costIdx]?.replace(/,/g,'')) || 0
+    });
+  }
+  for(const it of items) await put('portfolio', it.code, it);
+  return items.length;
+}
+
+/* ========== JSON バックアップ ========== */
+async function exportAll(includeKeys){
+  const dump = {};
+  for(const s of STORES){
+    if(!includeKeys && (s==='auth'||s==='apiKeys')) continue;
+    const {keys, values} = await getAll(s);
+    dump[s] = keys.map((k,i) => ({key:k, value:values[i]}));
+  }
+  const blob = new Blob([JSON.stringify(dump,null,2)],{type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const d = new Date().toISOString().slice(0,10).replace(/-/g,'');
+  a.download = `StockAdvisor_BackUp_${d}.json`;
+  a.click(); URL.revokeObjectURL(a.href);
+}
+async function importAll(file){
+  const text = await file.text();
+  const dump = JSON.parse(text);
+  for(const s of STORES){
+    if(!dump[s]) continue;
+    for(const {key,value} of dump[s]) await put(s, key, value);
+  }
+  alert('✅ 読み込み完了。リロードします。');
+  location.reload();
+}
+
+/* ========== 画面 ========== */
+let chartInstance = null;
+const $ = sel => document.querySelector(sel);
+const main = $('#main');
+const tabs = {
+  home: renderHome, stock: renderStock, watch: renderWatch,
+  portfolio: renderPortfolio, settings: renderSettings
+};
+document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', ()=> show(b.dataset.tab)));
+function show(name){ main.innerHTML=''; tabs[name](); }
+
+async function renderHome(){
+  main.innerHTML = `<div class="bg-white rounded p-4 shadow">
+    <h2 class="text-lg font-bold mb-2">🏠 ホーム</h2>
+    <p class="text-sm text-slate-600">高配当・長期保有を前提に、配当の持続性をスコアで可視化します。</p>
+    <ul class="list-disc ml-5 mt-3 text-sm">
+      <li>⚙️ 設定で J-Quants と Gemini を接続</li>
+      <li>🔍 銘柄タブで証券コードを入力（例：7203 / 8316 / 9433）</li>
+      <li>⭐ ウォッチに登録 → スコア順で一覧表示</li>
+      <li>💼 楽天証券CSVを取り込んで保有銘柄を一括登録</li>
+    </ul>
+    <div id="alertBox" class="mt-4"></div>
+  </div>`;
+  // ウォッチリストアラート
+  const watch = await getAll('watchlist');
+  const alerts = [];
+  watch.values.forEach(m => { if(m?.flags?.length) alerts.push(`${m.code}：${m.flags.join(' / ')}`); });
+  if(alerts.length){
+    $('#alertBox').innerHTML = `<div class="bg-amber-50 border border-amber-300 rounded p-3">
+      <p class="font-bold mb-1">🚨 ウォッチ銘柄の警報</p>
+      <ul class="text-sm list-disc ml-5">${alerts.map(a=>`<li>${a}</li>`).join('')}</ul></div>`;
+  }
+}
+
+function renderStock(){
+  main.innerHTML = `<div class="bg-white rounded p-4 shadow">
+    <h2 class="text-lg font-bold mb-2">🔍 銘柄分析</h2>
+    <div class="flex gap-2">
+      <input id="codeInput" placeholder="証券コード（例：7203）" class="border rounded px-2 py-1 flex-1">
+      <button id="analyzeBtn" class="bg-blue-600 text-white px-3 py-1 rounded">分析</button>
+    </div>
+    <div id="stockResult" class="mt-4"></div>
+  </div>`;
+  $('#analyzeBtn').addEventListener('click', async ()=>{
+    const code = $('#codeInput').value.trim();
+    if(!code) return;
+    $('#stockResult').innerHTML = '読み込み中...';
+    try {
+      const m = await analyzeStock(code);
+      renderStockResult(m);
+    } catch(e){ $('#stockResult').innerHTML = `<p class="text-red-600">エラー：${e.message}</p>`; }
+  });
+}
+function renderStockResult(m){
+  const fmt = (v, d=2) => v==null ? '—' : v.toFixed(d);
+  $('#stockResult').innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+      ${kpi('株価', fmt(m.close,0))}
+      ${kpi('PER', fmt(m.per))}
+      ${kpi('PBR', fmt(m.pbr))}
+      ${kpi('配当利回り', fmt(m.利回り)+'%')}
+      ${kpi('配当性向', fmt(m.配当性向)+'%')}
+      ${kpi('自己資本比率', fmt(m.自己資本比率)+'%')}
+      ${kpi('CF配当カバー', fmt(m.CF配当カバー))}
+      ${kpi('連続増配', m.連続増配年+'年')}
+    </div>
+    <div class="bg-slate-100 rounded p-3 mb-3">
+      <div class="text-sm">ヘルススコア</div>
+      <div class="text-3xl font-bold">${m.score} / 100</div>
+      <div class="text-sm mt-1">${m.flags.length ? m.flags.join(' ') : '🟢 警報なし'}</div>
+    </div>
+    <canvas id="divChart" height="120"></canvas>
+    <div class="flex gap-2 mt-3">
+      <button id="addWatch" class="bg-emerald-600 text-white px-3 py-1 rounded">⭐ ウォッチに追加</button>
+      <button id="askAi" class="bg-violet-600 text-white px-3 py-1 rounded">🤖 AIに配当持続性を聞く</button>
+    </div>
+    <div id="aiOut" class="mt-3 text-sm whitespace-pre-wrap"></div>
+  `;
+  // チャート
+  const years = Object.keys(m.yearlyDiv).sort();
+  if(chartInstance) chartInstance.destroy();
+  chartInstance = new Chart($('#divChart'), {
+    type:'bar',
+    data:{labels:years, datasets:[{label:'年間配当（円）', data: years.map(y=>m.yearlyDiv[y])}]},
+    options:{responsive:true, plugins:{legend:{display:false}}}
+  });
+  $('#addWatch').addEventListener('click', async ()=>{
+    await put('watchlist', m.code, m);
+    alert('追加しました');
+  });
+  $('#askAi').addEventListener('click', async ()=>{
+    $('#aiOut').textContent = '考え中...';
+    const prompt = `以下の銘柄の財務指標から、長期保有を前提とした「配当の持続性」を5段階で評価し、強み3点・リスク3点・保有判断（保有継続 / 様子見 / 売却検討）を簡潔に出力してください。投資助言ではなく、財務情報の読み取りサポートとして回答してください。\n\n銘柄コード: ${m.code}\n株価: ${m.close}\nPER: ${m.per}\nPBR: ${m.pbr}\n配当利回り(%): ${m.利回り}\n配当性向(%): ${m.配当性向}\n自己資本比率(%): ${m.自己資本比率}\nCF配当カバー: ${m.CF配当カバー}\n連続増配年: ${m.連続増配年}\n年次配当推移: ${JSON.stringify(m.yearlyDiv)}`;
+    try {
+      const out = await askGemini(prompt);
+      $('#aiOut').textContent = out;
+      await put('ai_memos', `${m.code}_${Date.now()}`, {code:m.code, prompt, out, at:Date.now()});
+    } catch(e){ $('#aiOut').textContent = `エラー：${e.message}`; }
+  });
+}
+function kpi(label, val){
+  return `<div class="bg-white border rounded p-2"><div class="text-xs text-slate-500">${label}</div><div class="font-bold">${val}</div></div>`;
+}
+
+async function renderWatch(){
+  const {keys, values} = await getAll('watchlist');
+  const rows = values.map((m,i)=>({...m, key:keys[i]})).sort((a,b)=>b.score - a.score);
+  main.innerHTML = `<div class="bg-white rounded p-4 shadow">
+    <h2 class="text-lg font-bold mb-2">⭐ ウォッチリスト</h2>
+    <table class="w-full text-sm">
+      <thead><tr class="text-left border-b"><th>コード</th><th>スコア</th><th>利回り</th><th>配当性向</th><th>警報</th><th></th></tr></thead>
+      <tbody>${rows.map(r=>`<tr class="border-b">
+        <td>${r.code}</td><td class="font-bold">${r.score}</td>
+        <td>${(r.利回り??0).toFixed(2)}%</td>
+        <td>${(r.配当性向??0).toFixed(1)}%</td>
+        <td>${r.flags?.join(' ')||'—'}</td>
+        <td><button class="text-red-600" data-del="${r.code}">削除</button></td>
+      </tr>`).join('')}</tbody>
+    </table>
+  </div>`;
+  document.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async ()=>{
+    await del('watchlist', b.dataset.del); renderWatch();
+  }));
+}
+
+async function renderPortfolio(){
+  const {keys, values} = await getAll('portfolio');
+  let totalCost = 0, totalEval = 0, totalDiv = 0;
+  const rows = [];
+  for(let i=0;i<keys.length;i++){
+    const p = values[i];
+    const cache = await get('cache_prices', p.code);
+    const close = cache?.close;
+    const finCache = await get('cache_dividends', p.code);
+    const dps = finCache?.data?.dividend?.[0] ? parseFloat(finCache.data.dividend[0].DividendPayablePerShare)||0 : 0;
+    const evalAmt = close ? close * p.quantity : null;
+    const costAmt = p.cost * p.quantity;
+    const annualDiv = dps * p.quantity;
+    totalCost += costAmt; totalEval += evalAmt||0; totalDiv += annualDiv;
+    rows.push({...p, close, evalAmt, costAmt, annualDiv});
+  }
+  main.innerHTML = `<div class="bg-white rounded p-4 shadow">
+    <h2 class="text-lg font-bold mb-2">💼 ポートフォリオ</h2>
+    <div class="grid grid-cols-3 gap-2 mb-3">
+      ${kpi('取得額合計', totalCost.toLocaleString())}
+      ${kpi('評価額合計', totalEval.toLocaleString())}
+      ${kpi('年間配当予測', totalDiv.toLocaleString()+'円')}
+    </div>
+    <input type="file" id="rakutenCsv" accept=".csv" class="mb-3">
+    <p class="text-xs text-slate-500 mb-3">楽天証券「保有商品一覧」CSVをドロップ（Shift-JIS）</p>
+    <table class="w-full text-sm">
+      <thead><tr class="text-left border-b"><th>コード</th><th>銘柄</th><th>数量</th><th>取得</th><th>現在</th><th>評価額</th><th>年配当</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr class="border-b">
+        <td>${r.code}</td><td>${r.name||''}</td><td>${r.quantity}</td>
+        <td>${r.cost}</td><td>${r.close||'—'}</td>
+        <td>${(r.evalAmt||0).toLocaleString()}</td>
+        <td>${(r.annualDiv||0).toLocaleString()}</td>
+      </tr>`).join('')}</tbody>
+    </table>
+  </div>`;
+  $('#rakutenCsv').addEventListener('change', async e=>{
+    const f = e.target.files[0]; if(!f) return;
+    try { const n = await importRakutenCSV(f); alert(`${n}件取り込み完了`); renderPortfolio(); }
+    catch(err){ alert('エラー：'+err.message); }
+  });
+}
+
+async function renderSettings(){
+  const hasRT = !!(await get('auth','refreshToken'));
+  const hasKey = !!(await get('apiKeys','gemini'));
+  const usage = await (navigator.storage?.estimate ? navigator.storage.estimate() : null);
+  main.innerHTML = `<div class="bg-white rounded p-4 shadow space-y-4">
+    <h2 class="text-lg font-bold">⚙️ 設定</h2>
+
+    <section>
+      <h3 class="font-bold">🔑 J-Quants ログイン ${hasRT?'<span class="text-emerald-600 text-sm">接続済</span>':''}</h3>
+      <input id="jqMail" placeholder="メールアドレス" class="border rounded px-2 py-1 w-full mb-1">
+      <input id="jqPass" type="password" placeholder="パスワード" class="border rounded px-2 py-1 w-full mb-1">
+      <button id="jqLoginBtn" class="bg-blue-600 text-white px-3 py-1 rounded">ログイン</button>
+      <button id="jqLogoutBtn" class="bg-slate-400 text-white px-3 py-1 rounded">ログアウト</button>
+      <p class="text-xs text-slate-500 mt-1">パスワードは保存しません。トークンのみ IndexedDB に保存します。</p>
+    </section>
+
+    <section>
+      <h3 class="font-bold">🤖 Gemini APIキー（BYOK） ${hasKey?'<span class="text-emerald-600 text-sm">設定済</span>':''}</h3>
+      <input id="geminiKey" type="password" placeholder="AIzaSy..." class="border rounded px-2 py-1 w-full mb-1">
+      <button id="geminiSave" class="bg-violet-600 text-white px-3 py-1 rounded">保存</button>
+      <p class="text-xs text-slate-500 mt-1">この端末のIndexedDBにのみ保存されます。</p>
+    </section>
+
+    <section>
+      <h3 class="font-bold">💾 バックアップ</h3>
+      <button id="expBtn" class="bg-emerald-600 text-white px-3 py-1 rounded">JSON書き出し（鍵を含めない）</button>
+      <button id="expBtnAll" class="bg-emerald-700 text-white px-3 py-1 rounded">JSON書き出し（鍵含む）</button>
+      <input type="file" id="impFile" accept=".json" class="mt-2">
+    </section>
+
+    <section class="text-xs text-slate-500">
+      <div>DB名：${DB_NAME}</div>
+      <div>容量：${usage ? `${(usage.usage/1024/1024).toFixed(2)}MB / ${(usage.quota/1024/1024).toFixed(0)}MB` : '取得不可'}</div>
+      <div>永続化：<span id="persistState">確認中...</span></div>
+    </section>
+  </div>`;
+
+  $('#jqLoginBtn').addEventListener('click', async ()=>{
+    try { await jqLogin($('#jqMail').value, $('#jqPass').value); alert('✅ ログイン成功'); renderSettings(); }
+    catch(e){ alert('エラー：'+e.message); }
+  });
+  $('#jqLogoutBtn').addEventListener('click', async ()=>{
+    await del('auth','refreshToken'); await del('auth','idToken'); renderSettings();
+  });
+  $('#geminiSave').addEventListener('click', async ()=>{
+    await put('apiKeys','gemini', $('#geminiKey').value.trim()); alert('保存しました'); renderSettings();
+  });
+  $('#expBtn').addEventListener('click', ()=> exportAll(false));
+  $('#expBtnAll').addEventListener('click', ()=> exportAll(true));
+  $('#impFile').addEventListener('change', e=>{ const f=e.target.files[0]; if(f) importAll(f); });
+
+  const persisted = await navigator.storage?.persisted?.();
+  $('#persistState').textContent = persisted ? '✅ 有効' : '⚠️ 未許可（再申請します）';
+  if(!persisted) await requestPersist();
+}
+
+/* ========== 起動 ========== */
+(async ()=>{
+  await openDB();
+  await requestPersist();
+  show('home');
+})();
+</script>
+</body>
+</html>
