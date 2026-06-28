@@ -109,6 +109,22 @@ async function jqFetch(path){
   return JSON.parse(j.body);
 }
 
+/* ========== J-Quants ページング一括取得 ========== */
+async function jqFetchAll(path){
+  let all = [];
+  let pgKey = null;
+  for(let i = 0; i < 30; i++){
+    const sep = path.includes('?') ? '&' : '?';
+    const url = pgKey ? `${path}${sep}pagination_key=${encodeURIComponent(pgKey)}` : path;
+    const res = await jqFetch(url);
+    const chunk = res.data || res.info || [];
+    all = all.concat(chunk);
+    pgKey = res.pagination_key || null;
+    if(!pgKey) break;
+  }
+  return { data: all };
+}
+
 /* ========== Stooq 株価（GAS プロキシ経由） ========== */
 async function stooqLatest(code){
   const proxyUrl = await get('apiKeys','jquantsProxy');
@@ -137,7 +153,7 @@ async function loadIssueMaster(force=false){
   if(!force && cache && (Date.now() - (cache.at||0)) < ONE_MONTH){
     return cache.items || [];
   }
-  const res = await jqFetch('/equities/master');
+  const res = await jqFetchAll('/equities/master');
   const raw = res.data || res.info || [];
   const items = raw.map(x => {
     const c = String(x.Code || x.code || '');
@@ -192,7 +208,7 @@ function riskFlags(metrics){
 async function analyzeStock(code){
   const code5 = code.length===4 ? code+'0' : code;
   // V2: /fins/statements → /fins/summary
-  const fins = await jqFetch(`/fins/summary?code=${code5}`);
+  const fins = await jqFetchAll(`/fins/summary?code=${code5}`);
   const price = await stooqLatest(code);
   await put('cache_financials', code, {data:fins, at:Date.now()});
   if(price) await put('cache_prices', code, {...price, at:Date.now()});
