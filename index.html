@@ -32,8 +32,8 @@
 /* ========== 環境設定（試験用は _TEST に変更） ========== */
 const ENV_SUFFIX = '_PROD';
 const DB_NAME = `StockAdvisorDB${ENV_SUFFIX}`;
-const DB_VERSION = 1;
-const STORES = ['apiKeys','watchlist','portfolio','cache_financials','cache_prices','ai_memos'];
+const DB_VERSION = 2;
+const STORES = ['apiKeys','watchlist','portfolio','cache_financials','cache_prices','ai_memos','cache_master'];
 document.getElementById('envBadge').textContent = `env: ${ENV_SUFFIX}`;
 
 /* ========== IndexedDB ========== */
@@ -130,6 +130,41 @@ async function stooqLatest(code){
   return { date: last[0], close: parseFloat(last[4]) };
 }
 
+/* ========== 銘柄マスタ（コード↔名称） ========== */
+async function loadIssueMaster(force=false){
+  const cache = await get('cache_master', 'all');
+  const ONE_MONTH = 30*24*60*60*1000;
+  if(!force && cache && (Date.now() - (cache.at||0)) < ONE_MONTH){
+    return cache.items || [];
+  }
+  const res = await jqFetch('/equities/master');
+  const raw = res.data || res.info || [];
+  const items = raw.map(x => {
+    const c = String(x.Code || x.code || '');
+    return {
+      code:  c.length === 5 ? c.slice(0,4) : c,
+      code5: c.length === 4 ? c + '0' : c,
+      name: x.CompanyName || x.Name || x.CompanyNameJP || x.CompanyNameJapanese || '',
+      nameEn: x.CompanyNameEnglish || x.NameEn || '',
+      sector: x.Sector17CodeName || x.Sector33CodeName || x.SectorName || ''
+    };
+  }).filter(x => x.code && x.name);
+  await put('cache_master', 'all', { items, at: Date.now() });
+  return items;
+}
+function searchIssues(items, query){
+  const q = (query||'').trim();
+  if(!q || !items) return [];
+  if(/^\d+$/.test(q)){
+    return items.filter(x => x.code.startsWith(q) || x.code5.startsWith(q)).slice(0,20);
+  }
+  const lower = q.toLowerCase();
+  return items.filter(x =>
+    x.name.toLowerCase().includes(lower) ||
+    (x.nameEn||'').toLowerCase().includes(lower)
+  ).slice(0,20);
+}
+
 /* ========== 指標計算 ========== */
 function calcHealthScore({利回り, 配当性向, 自己資本比率, 連続増配年, CF配当カバー}){
   let s = 0;
@@ -187,26 +222,54 @@ async function analyzeStock(code){
               : null;
   const cfCover = (opCF && totalDiv) ? opCF/totalDiv : null;
 
-  // 連続増配年（年次データの DivAnn から判定）
-  const yearly = {};
+  // 年次配当・配当性向の履歴を構築
+  const yearlyAll = {};
+  const payoutAll = {};
   stmts.forEach(s => {
     const y = (s.CurFYEn||'').slice(0,4);
+    if(!y) return;
     const ann = parseFloat(s.DivAnn);
-    if(y && !isNaN(ann)) yearly[y] = ann;
+    if(!isNaN(ann)) yearlyAll[y] = ann;
+    const prDirect = parseFloat(s.PayoutRatioAnn);
+    if(!isNaN(prDirect) && prDirect > 0){
+      payoutAll[y] = prDirect * 100;
+    } else {
+      const ni = parseFloat(s.NP);
+      const td = parseFloat(s.DivTotalAnn);
+      if(!isNaN(ni) && !isNaN(td) && ni > 0) payoutAll[y] = td/ni*100;
+    }
   });
-  const years = Object.keys(yearly).sort();
+  // 直近10年に絞り込み
+  const allYears = Object.keys(yearlyAll).sort();
+  const last10 = allYears.slice(-10);
+  const yearlyDiv = {}; const payoutHist = {};
+  last10.forEach(y => {
+    yearlyDiv[y] = yearlyAll[y];
+    if(payoutAll[y] != null) payoutHist[y] = payoutAll[y];
+  });
+  // 連続増配年
   let streak = 0;
-  for(let i = years.length-1; i > 0; i--){
-    if(yearly[years[i]] > yearly[years[i-1]]) streak++; else break;
+  for(let i = last10.length-1; i > 0; i--){
+    if(yearlyDiv[last10[i]] > yearlyDiv[last10[i-1]]) streak++; else break;
   }
 
+  // 銘柄名をマスタから補完
+  let name = '';
+  try {
+    const master = await get('cache_master', 'all');
+    if(master?.items){
+      const hit = master.items.find(x => x.code === code || x.code5 === code5);
+      name = hit?.name || '';
+    }
+  } catch(e){}
+
   const metrics = {
-    code, close, per, pbr, 利回り:yieldPct, 配当性向:payout,
-    自己資本比率:equityRatio, 連続増配年:streak, CF配当カバー:cfCover, eps, bps, dps
+    code, name, close, per, pbr, 利回り:yieldPct, 配当性向:payout,
+    自己資本比率:equityRatio, 連続増配年:streak, CF配当カバー:cfCover, eps, bps, dps,
+    yearlyDiv, payoutHist
   };
   metrics.score = calcHealthScore(metrics);
   metrics.flags = riskFlags(metrics);
-  metrics.yearlyDiv = yearly;
   return metrics;
 }
 
@@ -310,28 +373,76 @@ async function renderHome(){
   }
 }
 
-function renderStock(){
+async function renderStock(){
   main.innerHTML = `<div class="bg-white rounded p-4 shadow">
     <h2 class="text-lg font-bold mb-2">🔍 銘柄分析</h2>
     <div class="flex gap-2">
-      <input id="codeInput" placeholder="証券コード（例：7203）" class="border rounded px-2 py-1 flex-1">
+      <input id="codeInput" placeholder="証券コードまたは銘柄名（例：7203 / トヨタ）" class="border rounded px-2 py-1 flex-1" autocomplete="off">
       <button id="analyzeBtn" class="bg-blue-600 text-white px-3 py-1 rounded">分析</button>
+      <button id="reloadMasterBtn" class="bg-slate-200 text-slate-700 px-2 py-1 rounded text-xs" title="銘柄マスタを再取得">🔄</button>
     </div>
+    <div id="suggestions" class="border rounded bg-white shadow-sm max-h-60 overflow-y-auto hidden"></div>
+    <p id="masterStatus" class="text-xs text-slate-500 mt-1">銘柄マスタ：未取得</p>
     <div id="stockResult" class="mt-4"></div>
   </div>`;
-  $('#analyzeBtn').addEventListener('click', async ()=>{
-    const code = $('#codeInput').value.trim();
-    if(!code) return;
+  let master = [];
+  const statusEl = $('#masterStatus');
+  const sugEl = $('#suggestions');
+  const inputEl = $('#codeInput');
+
+  async function ensureMaster(force=false){
+    statusEl.textContent = '銘柄マスタ取得中...';
+    try {
+      master = await loadIssueMaster(force);
+      statusEl.textContent = `銘柄マスタ：${master.length}社（コード・名称で検索可）`;
+    } catch(e){
+      statusEl.innerHTML = `<span class="text-red-600">マスタ取得エラー：${e.message}</span>`;
+    }
+  }
+  await ensureMaster();
+
+  function renderSuggestions(q){
+    const hits = searchIssues(master, q);
+    if(!hits.length || !q){ sugEl.classList.add('hidden'); sugEl.innerHTML=''; return; }
+    sugEl.classList.remove('hidden');
+    sugEl.innerHTML = hits.map(h => `<button class="block w-full text-left px-2 py-1 hover:bg-slate-100 border-b text-sm" data-code="${h.code}"><span class="font-mono text-slate-500 mr-2">${h.code}</span><span class="font-medium">${h.name}</span><span class="text-xs text-slate-400 ml-2">${h.sector||''}</span></button>`).join('');
+    sugEl.querySelectorAll('[data-code]').forEach(b => b.addEventListener('mousedown', e=>{
+      e.preventDefault();
+      inputEl.value = b.dataset.code;
+      sugEl.classList.add('hidden');
+      doAnalyze();
+    }));
+  }
+  inputEl.addEventListener('input', e => renderSuggestions(e.target.value));
+  inputEl.addEventListener('focus', e => { if(e.target.value) renderSuggestions(e.target.value); });
+  inputEl.addEventListener('blur', () => setTimeout(()=>sugEl.classList.add('hidden'), 200));
+
+  async function doAnalyze(){
+    let val = inputEl.value.trim();
+    if(!val) return;
+    if(!/^\d+$/.test(val)){
+      const hits = searchIssues(master, val);
+      if(!hits.length){ $('#stockResult').innerHTML = `<p class="text-red-600">該当する銘柄が見つかりません：${val}</p>`; return; }
+      val = hits[0].code;
+      inputEl.value = val;
+    }
     $('#stockResult').innerHTML = '読み込み中...';
     try {
-      const m = await analyzeStock(code);
+      const m = await analyzeStock(val);
       renderStockResult(m);
     } catch(e){ $('#stockResult').innerHTML = `<p class="text-red-600">エラー：${e.message}</p>`; }
-  });
+  }
+  $('#analyzeBtn').addEventListener('click', doAnalyze);
+  inputEl.addEventListener('keydown', e => { if(e.key === 'Enter') doAnalyze(); });
+  $('#reloadMasterBtn').addEventListener('click', ()=> ensureMaster(true));
 }
 function renderStockResult(m){
   const fmt = (v, d=2) => v==null ? '—' : v.toFixed(d);
   $('#stockResult').innerHTML = `
+    <div class="mb-3 pb-2 border-b">
+      <div class="text-xs text-slate-500 font-mono">${m.code}</div>
+      <div class="text-xl font-bold">${m.name || '（銘柄名取得不可）'}</div>
+    </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
       ${kpi('株価', fmt(m.close,0))}
       ${kpi('PER', fmt(m.per))}
@@ -347,28 +458,44 @@ function renderStockResult(m){
       <div class="text-3xl font-bold">${m.score} / 100</div>
       <div class="text-sm mt-1">${m.flags.length ? m.flags.join(' ') : '🟢 警報なし'}</div>
     </div>
+    <h3 class="font-bold text-sm mt-2 mb-1">📊 過去10年の配当・配当性向推移</h3>
     <canvas id="divChart" height="120"></canvas>
+    <div id="historyTable" class="mt-3"></div>
     <div class="flex gap-2 mt-3">
       <button id="addWatch" class="bg-emerald-600 text-white px-3 py-1 rounded">⭐ ウォッチに追加</button>
       <button id="askAi" class="bg-violet-600 text-white px-3 py-1 rounded">🤖 AIに配当持続性を聞く</button>
     </div>
     <div id="aiOut" class="mt-3 text-sm whitespace-pre-wrap"></div>
   `;
-  // チャート
+  // 過去10年チャート（配当：棒 / 配当性向：折れ線・第2軸）
   const years = Object.keys(m.yearlyDiv).sort();
   if(chartInstance) chartInstance.destroy();
   chartInstance = new Chart($('#divChart'), {
-    type:'bar',
-    data:{labels:years, datasets:[{label:'年間配当（円）', data: years.map(y=>m.yearlyDiv[y])}]},
-    options:{responsive:true, plugins:{legend:{display:false}}}
+    data:{
+      labels:years,
+      datasets:[
+        { type:'bar', label:'年間配当（円）', data: years.map(y=>m.yearlyDiv[y]), backgroundColor:'rgba(59,130,246,0.7)', yAxisID:'y' },
+        { type:'line', label:'配当性向（%）', data: years.map(y=>m.payoutHist?.[y] ?? null), borderColor:'rgb(220,38,38)', backgroundColor:'rgba(220,38,38,0.3)', tension:0.2, yAxisID:'y1', spanGaps:true }
+      ]
+    },
+    options:{
+      responsive:true,
+      scales:{
+        y:{ position:'left', title:{display:true, text:'配当（円）'}, beginAtZero:true },
+        y1:{ position:'right', title:{display:true, text:'配当性向（%）'}, beginAtZero:true, grid:{drawOnChartArea:false} }
+      }
+    }
   });
+  // 履歴テーブル
+  const tableRows = years.map(y => `<tr class="border-b"><td class="py-1">${y}</td><td class="text-right">${m.yearlyDiv[y]!=null ? m.yearlyDiv[y].toFixed(1)+'円' : '—'}</td><td class="text-right">${m.payoutHist?.[y]!=null ? m.payoutHist[y].toFixed(1)+'%' : '—'}</td></tr>`).join('');
+  $('#historyTable').innerHTML = `<table class="w-full text-sm"><thead><tr class="border-b text-left"><th>年度</th><th class="text-right">配当（DPS）</th><th class="text-right">配当性向</th></tr></thead><tbody>${tableRows}</tbody></table>`;
   $('#addWatch').addEventListener('click', async ()=>{
     await put('watchlist', m.code, m);
     alert('追加しました');
   });
   $('#askAi').addEventListener('click', async ()=>{
     $('#aiOut').textContent = '考え中...';
-    const prompt = `以下の銘柄の財務指標から、長期保有を前提とした「配当の持続性」を5段階で評価し、強み3点・リスク3点・保有判断（保有継続 / 様子見 / 売却検討）を簡潔に出力してください。投資助言ではなく、財務情報の読み取りサポートとして回答してください。\n\n銘柄コード: ${m.code}\n株価: ${m.close}\nPER: ${m.per}\nPBR: ${m.pbr}\n配当利回り(%): ${m.利回り}\n配当性向(%): ${m.配当性向}\n自己資本比率(%): ${m.自己資本比率}\nCF配当カバー: ${m.CF配当カバー}\n連続増配年: ${m.連続増配年}\n年次配当推移: ${JSON.stringify(m.yearlyDiv)}`;
+    const prompt = `以下の銘柄の財務指標から、長期保有を前提とした「配当の持続性」を5段階で評価し、強み3点・リスク3点・保有判断（保有継続 / 様子見 / 売却検討）を簡潔に出力してください。投資助言ではなく、財務情報の読み取りサポートとして回答してください。\n\n銘柄コード: ${m.code}\n株価: ${m.close}\nPER: ${m.per}\nPBR: ${m.pbr}\n配当利回り(%): ${m.利回り}\n配当性向(%): ${m.配当性向}\n自己資本比率(%): ${m.自己資本比率}\nCF配当カバー: ${m.CF配当カバー}\n連続増配年: ${m.連続増配年}\n銘柄名: ${m.name||'-'}\n過去10年配当推移: ${JSON.stringify(m.yearlyDiv)}\n過去10年配当性向推移(%): ${JSON.stringify(m.payoutHist||{})}`;
     try {
       const out = await askGemini(prompt);
       $('#aiOut').textContent = out;
