@@ -92,17 +92,21 @@ async function requestPersist(){
   return false;
 }
 
-/* ========== J-Quants API V2（APIキー方式） ========== */
-const JQ_BASE = 'https://api.jquants.com/v2';
+/* ========== J-Quants API V2（GAS プロキシ経由 / CORS回避） ========== */
 async function jqFetch(path){
   const apiKey = await get('apiKeys','jquants');
+  const proxyUrl = await get('apiKeys','jquantsProxy');
   if(!apiKey) throw new Error('J-Quants APIキー未設定。⚙️設定タブで登録してください。');
-  const r = await fetch(`${JQ_BASE}${path}`, { headers:{'x-api-key': apiKey}});
-  if(!r.ok){
-    const t = await r.text().catch(()=>'');
-    throw new Error(`J-Quants APIエラー: ${r.status} ${t.slice(0,120)}`);
-  }
-  return r.json();
+  if(!proxyUrl) throw new Error('J-Quantsプロキシ未設定。⚙️設定タブで GAS Web App のURLを登録してください。');
+  const r = await fetch(proxyUrl, {
+    method:'POST',
+    body: JSON.stringify({ path, apiKey })
+  });
+  if(!r.ok) throw new Error(`プロキシ通信エラー: ${r.status}`);
+  const j = await r.json();
+  if(j.error) throw new Error(`プロキシ: ${j.error}`);
+  if(j.status >= 400) throw new Error(`J-Quants APIエラー: ${j.status} ${(j.body||'').slice(0,160)}`);
+  return JSON.parse(j.body);
 }
 
 /* ========== Stooq 株価 ========== */
@@ -427,10 +431,20 @@ async function renderPortfolio(){
 
 async function renderSettings(){
   const hasJqKey = !!(await get('apiKeys','jquants'));
+  const hasJqProxy = !!(await get('apiKeys','jquantsProxy'));
+  const curProxy = (await get('apiKeys','jquantsProxy')) || '';
   const hasKey = !!(await get('apiKeys','gemini'));
   const usage = await (navigator.storage?.estimate ? navigator.storage.estimate() : null);
   main.innerHTML = `<div class="bg-white rounded p-4 shadow space-y-4">
     <h2 class="text-lg font-bold">⚙️ 設定</h2>
+
+    <section>
+      <h3 class="font-bold">📡 J-Quants プロキシ（GAS Web App） ${hasJqProxy?'<span class="text-emerald-600 text-sm">設定済</span>':''}</h3>
+      <input id="jqProxy" type="url" value="${curProxy}" placeholder="https://script.google.com/macros/s/.../exec" class="border rounded px-2 py-1 w-full mb-1">
+      <button id="jqProxySave" class="bg-cyan-600 text-white px-3 py-1 rounded">保存</button>
+      <button id="jqProxyClear" class="bg-slate-400 text-white px-3 py-1 rounded">クリア</button>
+      <p class="text-xs text-slate-500 mt-1">J-Quants は CORS非対応のため GAS Web App を中継します。</p>
+    </section>
 
     <section>
       <h3 class="font-bold">🔑 J-Quants APIキー（V2） ${hasJqKey?'<span class="text-emerald-600 text-sm">設定済</span>':''}</h3>
@@ -461,6 +475,14 @@ async function renderSettings(){
     </section>
   </div>`;
 
+  $('#jqProxySave').addEventListener('click', async ()=>{
+    const v = $('#jqProxy').value.trim();
+    if(!v){ alert('GAS URLを入力してください'); return; }
+    await put('apiKeys','jquantsProxy', v); alert('✅ 保存しました'); renderSettings();
+  });
+  $('#jqProxyClear').addEventListener('click', async ()=>{
+    await del('apiKeys','jquantsProxy'); renderSettings();
+  });
   $('#jqKeySave').addEventListener('click', async ()=>{
     const v = $('#jqKey').value.trim();
     if(!v){ alert('APIキーを入力してください'); return; }
