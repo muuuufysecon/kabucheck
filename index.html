@@ -147,35 +147,42 @@ function riskFlags(metrics){
 /* ========== 銘柄分析 ========== */
 async function analyzeStock(code){
   const code5 = code.length===4 ? code+'0' : code;
-  const fins = await jqFetch(`/fins/statements?code=${code5}`);
+  // V2: /fins/statements → /fins/summary
+  const fins = await jqFetch(`/fins/summary?code=${code5}`);
   const price = await stooqLatest(code);
   await put('cache_financials', code, {data:fins, at:Date.now()});
   if(price) await put('cache_prices', code, {...price, at:Date.now()});
 
-  const stmts = (fins.statements || []).filter(x => x.TypeOfDocument?.includes('FY'));
-  const latest = stmts[stmts.length-1] || {};
-  const eps = parseFloat(latest.EarningsPerShare) || null;
-  const bps = parseFloat(latest.BookValuePerShare) || null;
-  const dps = parseFloat(latest.ResultDividendPerShareAnnual) || null;
-  const opCF = parseFloat(latest.CashFlowsFromOperatingActivities) || null;
-  const equityRatio = parseFloat(latest.EquityToAssetRatio) ? parseFloat(latest.EquityToAssetRatio)*100 : null;
+  // V2: レスポンスは data 配列、年次は CurPerType === 'FY' で絞り込み
+  const all = fins.data || [];
+  const stmts = all.filter(x => x.CurPerType === 'FY');
+  const latest = stmts[stmts.length-1] || all[all.length-1] || {};
+  const eps = parseFloat(latest.EPS) || null;
+  const bps = parseFloat(latest.BPS) || null;
+  const dps = parseFloat(latest.DivAnn) || null;
+  const opCF = parseFloat(latest.CFO) || null;
+  // EqAR は小数（0.45 → 45%）
+  const equityRatio = parseFloat(latest.EqAR) ? parseFloat(latest.EqAR)*100 : null;
 
   const close = price?.close;
   const per = (close && eps) ? close/eps : null;
   const pbr = (close && bps) ? close/bps : null;
   const yieldPct = (close && dps) ? dps/close*100 : null;
 
-  // 配当性向
-  const netIncome = parseFloat(latest.Profit) || null;
-  const totalDiv = parseFloat(latest.ResultTotalDividendPaidAnnual) || null;
-  const payout = (netIncome && totalDiv) ? totalDiv/netIncome*100 : null;
+  // 配当性向：V2 は PayoutRatioAnn が直接提供される
+  const netIncome = parseFloat(latest.NP) || null;
+  const totalDiv = parseFloat(latest.DivTotalAnn) || null;
+  const payoutDirect = parseFloat(latest.PayoutRatioAnn);
+  const payout = !isNaN(payoutDirect) && payoutDirect>0 ? payoutDirect*100
+              : (netIncome && totalDiv) ? totalDiv/netIncome*100
+              : null;
   const cfCover = (opCF && totalDiv) ? opCF/totalDiv : null;
 
-  // 連続増配年（statementsの年次配当から判定）
+  // 連続増配年（年次データの DivAnn から判定）
   const yearly = {};
   stmts.forEach(s => {
-    const y = (s.CurrentFiscalYearEndDate||'').slice(0,4);
-    const ann = parseFloat(s.ResultDividendPerShareAnnual);
+    const y = (s.CurFYEn||'').slice(0,4);
+    const ann = parseFloat(s.DivAnn);
     if(y && !isNaN(ann)) yearly[y] = ann;
   });
   const years = Object.keys(yearly).sort();
@@ -394,9 +401,10 @@ async function renderPortfolio(){
     const cache = await get('cache_prices', p.code);
     const close = cache?.close;
     const finCache = await get('cache_financials', p.code);
-    const stmts = (finCache?.data?.statements || []).filter(x=>x.TypeOfDocument?.includes('FY'));
+    // V2: data 配列、CurPerType === 'FY' で絞り込み
+    const stmts = (finCache?.data?.data || []).filter(x=>x.CurPerType === 'FY');
     const latest = stmts[stmts.length-1] || {};
-    const dps = parseFloat(latest.ResultDividendPerShareAnnual) || 0;
+    const dps = parseFloat(latest.DivAnn) || 0;
     const evalAmt = close ? close * p.quantity : null;
     const costAmt = p.cost * p.quantity;
     const annualDiv = dps * p.quantity;
