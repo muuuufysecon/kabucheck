@@ -33,7 +33,7 @@
 const ENV_SUFFIX = '_PROD';
 const DB_NAME = `StockAdvisorDB${ENV_SUFFIX}`;
 const DB_VERSION = 1;
-const STORES = ['auth','apiKeys','watchlist','portfolio','cache_financials','cache_dividends','cache_prices','ai_memos'];
+const STORES = ['apiKeys','watchlist','portfolio','cache_financials','cache_prices','ai_memos'];
 document.getElementById('envBadge').textContent = `env: ${ENV_SUFFIX}`;
 
 /* ========== IndexedDB ========== */
@@ -92,37 +92,15 @@ async function requestPersist(){
   return false;
 }
 
-/* ========== J-Quants API ========== */
-const JQ_BASE = 'https://api.jquants.com/v1';
-async function jqLogin(email, password){
-  const r1 = await fetch(`${JQ_BASE}/token/auth_user`,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({mailaddress:email, password})
-  });
-  if(!r1.ok) throw new Error('ログイン失敗（メール/パスワードを確認）');
-  const {refreshToken} = await r1.json();
-  await put('auth','refreshToken', refreshToken);
-  await refreshIdToken();
-  return true;
-}
-async function refreshIdToken(){
-  const rt = await get('auth','refreshToken');
-  if(!rt) throw new Error('未ログイン');
-  const r = await fetch(`${JQ_BASE}/token/auth_refresh?refreshtoken=${encodeURIComponent(rt)}`,{method:'POST'});
-  if(!r.ok) throw new Error('IDトークン取得失敗');
-  const {idToken} = await r.json();
-  await put('auth','idToken', idToken);
-  await put('auth','idTokenAt', Date.now());
-  return idToken;
-}
+/* ========== J-Quants API V2（APIキー方式） ========== */
+const JQ_BASE = 'https://api.jquants.com/v2';
 async function jqFetch(path){
-  let idToken = await get('auth','idToken');
-  const at = await get('auth','idTokenAt') || 0;
-  if(!idToken || Date.now() - at > 23*3600*1000) idToken = await refreshIdToken();
-  const r = await fetch(`${JQ_BASE}${path}`, { headers:{Authorization:`Bearer ${idToken}`}});
-  if(r.status === 401){ idToken = await refreshIdToken();
-    return fetch(`${JQ_BASE}${path}`,{headers:{Authorization:`Bearer ${idToken}`}}).then(x=>x.json());
+  const apiKey = await get('apiKeys','jquants');
+  if(!apiKey) throw new Error('J-Quants APIキー未設定。⚙️設定タブで登録してください。');
+  const r = await fetch(`${JQ_BASE}${path}`, { headers:{'x-api-key': apiKey}});
+  if(!r.ok){
+    const t = await r.text().catch(()=>'');
+    throw new Error(`J-Quants APIエラー: ${r.status} ${t.slice(0,120)}`);
   }
   return r.json();
 }
@@ -166,10 +144,8 @@ function riskFlags(metrics){
 async function analyzeStock(code){
   const code5 = code.length===4 ? code+'0' : code;
   const fins = await jqFetch(`/fins/statements?code=${code5}`);
-  const divs = await jqFetch(`/fins/dividend?code=${code5}`);
   const price = await stooqLatest(code);
   await put('cache_financials', code, {data:fins, at:Date.now()});
-  await put('cache_dividends', code, {data:divs, at:Date.now()});
   if(price) await put('cache_prices', code, {...price, at:Date.now()});
 
   const stmts = (fins.statements || []).filter(x => x.TypeOfDocument?.includes('FY'));
@@ -185,20 +161,19 @@ async function analyzeStock(code){
   const pbr = (close && bps) ? close/bps : null;
   const yieldPct = (close && dps) ? dps/close*100 : null;
 
-  // 配当履歴
-  const divHistory = (divs.dividend || [])
-    .filter(d => d.ReferenceNumber && d.DividendPayableDate)
-    .map(d => ({date:d.DividendPayableDate, amount:parseFloat(d.DividendPayablePerShare)||0}));
-
   // 配当性向
   const netIncome = parseFloat(latest.Profit) || null;
   const totalDiv = parseFloat(latest.ResultTotalDividendPaidAnnual) || null;
   const payout = (netIncome && totalDiv) ? totalDiv/netIncome*100 : null;
   const cfCover = (opCF && totalDiv) ? opCF/totalDiv : null;
 
-  // 連続増配年（年次配当の単純判定）
+  // 連続増配年（statementsの年次配当から判定）
   const yearly = {};
-  divHistory.forEach(d => { const y = d.date.slice(0,4); yearly[y] = (yearly[y]||0) + d.amount; });
+  stmts.forEach(s => {
+    const y = (s.CurrentFiscalYearEndDate||'').slice(0,4);
+    const ann = parseFloat(s.ResultDividendPerShareAnnual);
+    if(y && !isNaN(ann)) yearly[y] = ann;
+  });
   const years = Object.keys(yearly).sort();
   let streak = 0;
   for(let i = years.length-1; i > 0; i--){
@@ -211,7 +186,6 @@ async function analyzeStock(code){
   };
   metrics.score = calcHealthScore(metrics);
   metrics.flags = riskFlags(metrics);
-  metrics.history = divHistory;
   metrics.yearlyDiv = yearly;
   return metrics;
 }
@@ -260,7 +234,7 @@ async function importRakutenCSV(file){
 async function exportAll(includeKeys){
   const dump = {};
   for(const s of STORES){
-    if(!includeKeys && (s==='auth'||s==='apiKeys')) continue;
+    if(!includeKeys && s==='apiKeys') continue;
     const {keys, values} = await getAll(s);
     dump[s] = keys.map((k,i) => ({key:k, value:values[i]}));
   }
@@ -298,7 +272,7 @@ async function renderHome(){
     <h2 class="text-lg font-bold mb-2">🏠 ホーム</h2>
     <p class="text-sm text-slate-600">高配当・長期保有を前提に、配当の持続性をスコアで可視化します。</p>
     <ul class="list-disc ml-5 mt-3 text-sm">
-      <li>⚙️ 設定で J-Quants と Gemini を接続</li>
+      <li>⚙️ 設定で J-Quants APIキーと Gemini APIキーを登録</li>
       <li>🔍 銘柄タブで証券コードを入力（例：7203 / 8316 / 9433）</li>
       <li>⭐ ウォッチに登録 → スコア順で一覧表示</li>
       <li>💼 楽天証券CSVを取り込んで保有銘柄を一括登録</li>
@@ -415,8 +389,10 @@ async function renderPortfolio(){
     const p = values[i];
     const cache = await get('cache_prices', p.code);
     const close = cache?.close;
-    const finCache = await get('cache_dividends', p.code);
-    const dps = finCache?.data?.dividend?.[0] ? parseFloat(finCache.data.dividend[0].DividendPayablePerShare)||0 : 0;
+    const finCache = await get('cache_financials', p.code);
+    const stmts = (finCache?.data?.statements || []).filter(x=>x.TypeOfDocument?.includes('FY'));
+    const latest = stmts[stmts.length-1] || {};
+    const dps = parseFloat(latest.ResultDividendPerShareAnnual) || 0;
     const evalAmt = close ? close * p.quantity : null;
     const costAmt = p.cost * p.quantity;
     const annualDiv = dps * p.quantity;
@@ -450,19 +426,18 @@ async function renderPortfolio(){
 }
 
 async function renderSettings(){
-  const hasRT = !!(await get('auth','refreshToken'));
+  const hasJqKey = !!(await get('apiKeys','jquants'));
   const hasKey = !!(await get('apiKeys','gemini'));
   const usage = await (navigator.storage?.estimate ? navigator.storage.estimate() : null);
   main.innerHTML = `<div class="bg-white rounded p-4 shadow space-y-4">
     <h2 class="text-lg font-bold">⚙️ 設定</h2>
 
     <section>
-      <h3 class="font-bold">🔑 J-Quants ログイン ${hasRT?'<span class="text-emerald-600 text-sm">接続済</span>':''}</h3>
-      <input id="jqMail" placeholder="メールアドレス" class="border rounded px-2 py-1 w-full mb-1">
-      <input id="jqPass" type="password" placeholder="パスワード" class="border rounded px-2 py-1 w-full mb-1">
-      <button id="jqLoginBtn" class="bg-blue-600 text-white px-3 py-1 rounded">ログイン</button>
-      <button id="jqLogoutBtn" class="bg-slate-400 text-white px-3 py-1 rounded">ログアウト</button>
-      <p class="text-xs text-slate-500 mt-1">パスワードは保存しません。トークンのみ IndexedDB に保存します。</p>
+      <h3 class="font-bold">🔑 J-Quants APIキー（V2） ${hasJqKey?'<span class="text-emerald-600 text-sm">設定済</span>':''}</h3>
+      <input id="jqKey" type="password" placeholder="ダッシュボードで発行したAPIキー" class="border rounded px-2 py-1 w-full mb-1">
+      <button id="jqKeySave" class="bg-blue-600 text-white px-3 py-1 rounded">保存</button>
+      <button id="jqKeyClear" class="bg-slate-400 text-white px-3 py-1 rounded">クリア</button>
+      <p class="text-xs text-slate-500 mt-1">jpx-jquants.com にログイン → ダッシュボードで APIキーを発行 → ここに貼り付け。</p>
     </section>
 
     <section>
@@ -486,12 +461,13 @@ async function renderSettings(){
     </section>
   </div>`;
 
-  $('#jqLoginBtn').addEventListener('click', async ()=>{
-    try { await jqLogin($('#jqMail').value, $('#jqPass').value); alert('✅ ログイン成功'); renderSettings(); }
-    catch(e){ alert('エラー：'+e.message); }
+  $('#jqKeySave').addEventListener('click', async ()=>{
+    const v = $('#jqKey').value.trim();
+    if(!v){ alert('APIキーを入力してください'); return; }
+    await put('apiKeys','jquants', v); alert('✅ 保存しました'); renderSettings();
   });
-  $('#jqLogoutBtn').addEventListener('click', async ()=>{
-    await del('auth','refreshToken'); await del('auth','idToken'); renderSettings();
+  $('#jqKeyClear').addEventListener('click', async ()=>{
+    await del('apiKeys','jquants'); renderSettings();
   });
   $('#geminiSave').addEventListener('click', async ()=>{
     await put('apiKeys','gemini', $('#geminiKey').value.trim()); alert('保存しました'); renderSettings();
