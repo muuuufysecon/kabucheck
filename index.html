@@ -4,7 +4,1395 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>高配当株 長期保有サポート</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.tailwindcss.com"></script><!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>投資判断AIノート</title>
+  <style>
+    :root {
+      color: #17202a;
+      background: #f5f7fb;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+    }
+
+    .app {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    header {
+      margin-bottom: 20px;
+    }
+
+    header h1 {
+      margin: 0 0 8px;
+    }
+
+    header p {
+      margin: 0;
+      color: #475569;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: #1f6feb;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+      margin: 4px;
+    }
+
+    button.active {
+      background: #111827;
+    }
+
+    button:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    .danger {
+      background: #dc2626;
+    }
+
+    .secondary {
+      background: #64748b;
+    }
+
+    .card {
+      background: white;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
+      margin-bottom: 20px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .summary div {
+      background: #f1f5f9;
+      border-radius: 12px;
+      padding: 14px;
+    }
+
+    .summary strong {
+      font-size: 1.1rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      margin: 10px 0;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 10px;
+      font: inherit;
+      background: white;
+    }
+
+    textarea {
+      min-height: 120px;
+    }
+
+    textarea.large {
+      min-height: 360px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 0.92rem;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #e5e7eb;
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f8fafc;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    .glossary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .glossary article {
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 14px;
+      background: #fbfdff;
+    }
+
+    .notice {
+      background: #eff6ff;
+      border-left: 5px solid #1f6feb;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin: 12px 0;
+      color: #1e3a8a;
+    }
+
+    .muted {
+      color: #64748b;
+      font-size: 0.9rem;
+    }
+
+    .row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    @media (max-width: 720px) {
+      .app {
+        padding: 14px;
+      }
+
+      table {
+        font-size: 0.82rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>投資判断AIノート</h1>
+      <p>決算資料・ポートフォリオ・投資用語・AI相談プロンプトを一体管理します。</p>
+    </header>
+
+    <nav class="tabs" id="tabs"></nav>
+
+    <main id="main"></main>
+  </div>
+
+  <script>
+    // ===== 環境設定 =====
+    // GitHub Pagesでは同じアカウント配下の複数アプリが同一オリジンになるため、
+    // 本番用・試験用で必ず異なる名前にする。
+    const ENV_SUFFIX = "_PROD";
+    const DB_NAME = `InvestmentAiNoteSingleDB${ENV_SUFFIX}`;
+    const DB_VERSION = 1;
+    const STORES = [
+      "holdings",
+      "watchlist",
+      "reports",
+      "aiResponses",
+      "decisions",
+      "profile",
+      "importHistory",
+      "userGlossary"
+    ];
+
+    const emptyHolding = {
+      code: "",
+      name: "",
+      sector: "",
+      accountType: "NISA",
+      shares: "",
+      averageCost: "",
+      currentPrice: "",
+      expectedDividendPerShare: "",
+      purpose: "",
+      reasonForHolding: "",
+      sellConditions: "",
+      nextCheckPoints: "",
+      memo: ""
+    };
+
+    const defaultProfile = {
+      id: "main",
+      purpose: "長期資産形成",
+      period: "10年以上",
+      riskTolerance: "普通",
+      focus: "配当、増配、安定性、割安性",
+      avoid: "大きな値下がり、減配、特定業種への集中"
+    };
+
+    const DEFAULT_GLOSSARY = [
+      {
+        id: "per",
+        term: "PER",
+        reading: "ピーイーアール",
+        category: "株価指標",
+        shortDescription: "株価が1株利益の何倍まで買われているかを示す指標。",
+        formula: "PER = 株価 ÷ EPS",
+        howToRead: "低いほど割安に見えますが、成長期待が低い企業も低PERになりやすいです。",
+        caution: "業種平均や過去水準と比較して見る必要があります。",
+        whereToFind: "株価は証券アプリ、EPSは決算短信の1株当たり情報で確認します。"
+      },
+      {
+        id: "pbr",
+        term: "PBR",
+        reading: "ピービーアール",
+        category: "株価指標",
+        shortDescription: "株価が1株純資産の何倍まで買われているかを示す指標。",
+        formula: "PBR = 株価 ÷ BPS",
+        howToRead: "1倍を下回ると解散価値より安いと見られることがあります。",
+        caution: "資産価値だけでは成長性や収益性を判断できません。",
+        whereToFind: "BPSは決算短信や証券情報サイトで確認します。"
+      },
+      {
+        id: "roe",
+        term: "ROE",
+        reading: "アールオーイー",
+        category: "収益性",
+        shortDescription: "株主資本を使ってどれだけ効率よく利益を出したかを示す指標。",
+        formula: "ROE = 当期純利益 ÷ 自己資本 × 100",
+        howToRead: "高いほど資本効率が良いとされます。",
+        caution: "自己資本が少ない企業では高く見える場合があります。",
+        whereToFind: "決算短信、決算説明資料、統合報告書などに掲載されます。"
+      },
+      {
+        id: "eps",
+        term: "EPS",
+        reading: "イーピーエス",
+        category: "決算資料用語",
+        shortDescription: "1株あたりの純利益。",
+        formula: "EPS = 当期純利益 ÷ 発行済株式数",
+        howToRead: "EPSが伸びるほど株主に帰属する利益が増えていると考えられます。",
+        caution: "一時的利益や自社株買いの影響も確認します。",
+        whereToFind: "決算短信の1株当たり当期純利益に掲載されます。"
+      },
+      {
+        id: "free-cash-flow",
+        term: "フリーキャッシュフロー",
+        reading: "フリーキャッシュフロー",
+        category: "キャッシュフロー",
+        shortDescription: "会社が自由に使える現金の目安。",
+        formula: "営業CF + 投資CF",
+        howToRead: "プラスが続く企業は資金余力があると見られます。",
+        caution: "成長投資が大きい企業では一時的にマイナスになる場合があります。",
+        whereToFind: "キャッシュフロー計算書で確認します。"
+      },
+      {
+        id: "dividend-payout-ratio",
+        term: "配当性向",
+        reading: "はいとうせいこう",
+        category: "株主還元",
+        shortDescription: "利益のうち、どれだけを配当に回しているかを示す割合。",
+        formula: "配当性向 = 1株配当 ÷ EPS × 100",
+        howToRead: "高すぎる場合、将来の減配リスクに注意します。",
+        caution: "一時的な利益減少で高く見える場合もあります。",
+        whereToFind: "決算説明資料、配当方針、証券情報サイトで確認します。"
+      }
+    ];
+
+    const PROMPT_TEMPLATES = [
+      {
+        id: "portfolio_review",
+        category: "ポートフォリオ診断",
+        name: "ポートフォリオ全体診断",
+        build: ({ profileText, portfolioText }) => `
+あなたは株式投資の判断を補助するアナリストです。
+以下のポートフォリオ情報をもとに、全体のバランスを診断してください。
+
+重要：
+- 売買を直接推奨しないでください。
+- 「買うべき」「売るべき」と断定しないでください。
+- 確認ポイント、リスク、改善観点を整理してください。
+
+【投資方針】
+${profileText}
+
+【ポートフォリオ情報】
+${portfolioText}
+
+【見てほしい観点】
+1. 全体バランス
+2. 業種の偏り
+3. 銘柄集中リスク
+4. 配当の安定性
+5. 含み益・含み損の見方
+6. 次に確認すべきこと
+
+【出力形式】
+■ 全体評価
+■ 良い点
+■ 注意点・リスク
+■ 偏りの確認
+■ 銘柄別コメント
+■ 今後の確認ポイント
+`.trim()
+      },
+      {
+        id: "dividend_review",
+        category: "ポートフォリオ診断",
+        name: "高配当株診断",
+        build: ({ profileText, portfolioText }) => `
+あなたは高配当株投資の判断を補助するアナリストです。
+以下のポートフォリオについて、配当の安定性と減配リスクを中心に整理してください。
+
+重要：
+- 売買を直接推奨しないでください。
+- 配当利回りの高さだけで良し悪しを判断しないでください。
+
+【投資方針】
+${profileText}
+
+【ポートフォリオ情報】
+${portfolioText}
+
+【分析してほしい観点】
+1. 配当利回りの水準
+2. 配当性向の確認が必要な銘柄
+3. 減配リスク
+4. 業績と配当の持続性
+5. 業種の偏り
+6. 次回決算で見るべき項目
+
+【出力形式】
+■ 配当ポートフォリオ全体の印象
+■ 良い点
+■ 注意すべき点
+■ 減配リスク確認リスト
+■ 銘柄別チェックポイント
+`.trim()
+      },
+      {
+        id: "holding_review",
+        category: "保有判断",
+        name: "保有継続判断",
+        build: ({ selectedHoldingText, reportText }) => `
+あなたは株式投資の判断を補助するアナリストです。
+以下の保有銘柄について、保有継続を考えるための材料を整理してください。
+
+重要：
+- 売買を断定しないでください。
+- 保有継続・売却検討・追加投資を判断する前に確認すべき点を整理してください。
+
+【保有銘柄】
+${selectedHoldingText}
+
+【直近決算メモ】
+${reportText}
+
+【見てほしい観点】
+1. 保有理由は今も有効か
+2. 購入時の前提が崩れていないか
+3. 売却条件に近づいていないか
+4. 決算内容に大きな変化はあるか
+5. 今後確認すべき情報
+
+【出力形式】
+■ 現状整理
+■ 保有理由の確認
+■ 注意点・リスク
+■ 次回確認事項
+■ 判断メモ
+`.trim()
+      },
+      {
+        id: "financial_report",
+        category: "決算分析",
+        name: "決算資料分析",
+        build: ({ reportText }) => `
+あなたは株式投資の決算分析を補助するアナリストです。
+以下の決算情報をもとに、投資判断の材料を整理してください。
+
+重要：
+- 売買を直接推奨しないでください。
+- 判断材料、リスク、次に確認すべき点を整理してください。
+
+【決算情報】
+${reportText}
+
+【見てほしい観点】
+1. 決算の全体評価
+2. 良かった点
+3. 悪かった点・注意点
+4. 通期予想の達成可能性
+5. 利益率・キャッシュフロー面の確認
+6. 次回決算で見るべき点
+
+【出力形式】
+■ 決算概要
+■ 良かった点
+■ 注意点・リスク
+■ 通期予想との関係
+■ 次回確認事項
+■ 判断メモ
+`.trim()
+      },
+      {
+        id: "glossary_explain",
+        category: "投資用語",
+        name: "投資用語を説明",
+        build: ({ glossaryTerm }) => `
+投資初心者にも分かるように「${glossaryTerm || "投資用語"}」を説明してください。
+
+以下の観点で整理してください。
+1. 意味
+2. 計算式
+3. 数字が高い・低い場合の見方
+4. 投資判断で使うときの注意点
+5. 決算資料のどこを見れば確認できるか
+6. 似た用語との違い
+`.trim()
+      }
+    ];
+
+    const state = {
+      tab: "portfolio",
+      holdings: [],
+      profile: { ...defaultProfile },
+      holdingForm: { ...emptyHolding },
+      selectedHoldingId: "",
+      selectedTemplateId: "portfolio_review",
+      reportText: "",
+      glossaryTerm: "",
+      generatedPrompt: "",
+      aiResponse: "",
+      decisionMemo: "",
+      csvPreview: [],
+      csvEncoding: "AUTO",
+      storageStatus: ""
+    };
+
+    // ===== IndexedDB =====
+    function initDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          STORES.forEach((storeName) => {
+            if (!db.objectStoreNames.contains(storeName)) {
+              db.createObjectStore(storeName, { keyPath: "id" });
+            }
+          });
+        };
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function getAll(storeName) {
+      const db = await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readonly");
+        const store = tx.objectStore(storeName);
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result || []);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    async function putItem(storeName, item) {
+      const db = await initDB();
+      const now = new Date().toISOString();
+      const record = {
+        ...item,
+        id: item.id || crypto.randomUUID(),
+        updatedAt: now,
+        createdAt: item.createdAt || now
+      };
+
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readwrite");
+        tx.objectStore(storeName).put(record);
+        tx.oncomplete = () => resolve(record);
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function deleteItem(storeName, id) {
+      const db = await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readwrite");
+        tx.objectStore(storeName).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function exportAllData() {
+      const data = {};
+      for (const storeName of STORES) {
+        data[storeName] = await getAll(storeName);
+      }
+      return {
+        app: "InvestmentAiNoteSingle",
+        dbName: DB_NAME,
+        exportedAt: new Date().toISOString(),
+        data
+      };
+    }
+
+    async function importAllData(backup) {
+      if (!backup || !backup.data) {
+        throw new Error("バックアップ形式が正しくありません。");
+      }
+
+      for (const [storeName, records] of Object.entries(backup.data)) {
+        if (!STORES.includes(storeName) || !Array.isArray(records)) continue;
+        for (const record of records) {
+          if (record && record.id) {
+            await putItem(storeName, record);
+          }
+        }
+      }
+    }
+
+    async function requestPersistentStorage() {
+      if (!navigator.storage || !navigator.storage.persist) {
+        state.storageStatus = "このブラウザでは持続的ストレージ申請に対応していません。";
+        return false;
+      }
+
+      try {
+        const result = await navigator.storage.persist();
+        state.storageStatus = result
+          ? "持続的ストレージ：有効"
+          : "持続的ストレージ：未許可（バックアップを定期的に作成してください）";
+        return result;
+      } catch (error) {
+        state.storageStatus = "持続的ストレージ申請でエラーが発生しました。";
+        return false;
+      }
+    }
+
+    // ===== 計算 =====
+    function toNumber(value) {
+      if (value === null || value === undefined || value === "") return 0;
+      const normalized = String(value)
+        .replace(/[円,%％株\s]/g, "")
+        .replace(/,/g, "")
+        .replace("▲", "-");
+      const num = Number(normalized);
+      return Number.isFinite(num) ? num : 0;
+    }
+
+    function calcHolding(raw) {
+      const shares = toNumber(raw.shares);
+      const averageCost = toNumber(raw.averageCost);
+      const currentPrice = toNumber(raw.currentPrice);
+      const expectedDividendPerShare = toNumber(raw.expectedDividendPerShare);
+
+      const acquisitionAmount = shares * averageCost;
+      const marketValue = shares * currentPrice;
+      const unrealizedGainLoss = marketValue - acquisitionAmount;
+      const gainLossRate = acquisitionAmount ? (unrealizedGainLoss / acquisitionAmount) * 100 : 0;
+      const annualDividend = shares * expectedDividendPerShare;
+      const dividendYield = currentPrice ? (expectedDividendPerShare / currentPrice) * 100 : 0;
+
+      return {
+        ...raw,
+        shares,
+        averageCost,
+        currentPrice,
+        expectedDividendPerShare,
+        acquisitionAmount,
+        marketValue,
+        unrealizedGainLoss,
+        gainLossRate,
+        annualDividend,
+        dividendYield
+      };
+    }
+
+    function calcPortfolioSummary(holdings) {
+      const totalCost = holdings.reduce((sum, h) => sum + toNumber(h.acquisitionAmount), 0);
+      const totalValue = holdings.reduce((sum, h) => sum + toNumber(h.marketValue), 0);
+      const totalGainLoss = totalValue - totalCost;
+      const totalGainLossRate = totalCost ? (totalGainLoss / totalCost) * 100 : 0;
+      const annualDividend = holdings.reduce((sum, h) => sum + toNumber(h.annualDividend), 0);
+      const portfolioDividendYield = totalValue ? (annualDividend / totalValue) * 100 : 0;
+
+      return {
+        totalCost,
+        totalValue,
+        totalGainLoss,
+        totalGainLossRate,
+        annualDividend,
+        portfolioDividendYield
+      };
+    }
+
+    function yen(value) {
+      return `${Math.round(toNumber(value)).toLocaleString("ja-JP")}円`;
+    }
+
+    function pct(value) {
+      return `${toNumber(value).toFixed(2)}%`;
+    }
+
+    // ===== CSV =====
+    const COLUMN_ALIASES = {
+      code: ["銘柄コード", "コード", "証券コード", "コード番号"],
+      name: ["銘柄名", "名称", "企業名"],
+      sector: ["業種", "セクター"],
+      accountType: ["口座区分", "口座", "預り区分", "NISA区分"],
+      shares: ["保有数量", "数量", "保有株数", "株数"],
+      averageCost: ["平均取得価額", "取得単価", "平均取得単価", "取得価額"],
+      currentPrice: ["現在値", "現在株価", "時価", "株価"],
+      marketValue: ["評価額", "時価評価額"],
+      unrealizedGainLoss: ["評価損益", "含み損益", "損益"],
+      gainLossRate: ["損益率", "評価損益率"],
+      expectedDividendPerShare: ["予想配当", "1株配当", "予想1株配当"],
+      dividendYield: ["配当利回り", "利回り"]
+    };
+
+    function parseCsvLine(line) {
+      const values = [];
+      let current = "";
+      let inQuotes = false;
+
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        const next = line[i + 1];
+
+        if (char === '"' && inQuotes && next === '"') {
+          current += '"';
+          i++;
+        } else if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === "," && !inQuotes) {
+          values.push(current);
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+
+      values.push(current);
+      return values;
+    }
+
+    function parseCsv(text) {
+      const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const lines = normalized.split("\n").filter((line) => line.trim() !== "");
+      if (!lines.length) return [];
+
+      const headers = parseCsvLine(lines[0]).map((h) => h.trim());
+      return lines.slice(1).map((line) => {
+        const values = parseCsvLine(line);
+        const row = {};
+        headers.forEach((header, index) => {
+          row[header] = values[index] || "";
+        });
+        return row;
+      }).filter((row) => {
+        const joined = Object.values(row).join("");
+        return joined && !joined.includes("合計") && !joined.includes("総合計");
+      });
+    }
+
+    function findColumn(row, aliases) {
+      const keys = Object.keys(row);
+      return keys.find((key) => aliases.includes(key));
+    }
+
+    function mapCsvRowsToHoldings(rows, fileName = "portfolio.csv", broker = "汎用CSV") {
+      return rows.map((row) => {
+        const mapped = {};
+
+        for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
+          const column = findColumn(row, aliases);
+          mapped[field] = column ? row[column] : "";
+        }
+
+        const code = String(mapped.code || "").trim();
+        const accountType = String(mapped.accountType || "未設定").trim();
+
+        return calcHolding({
+          id: `holding_${code || crypto.randomUUID()}_${accountType}`,
+          code,
+          name: String(mapped.name || "").trim(),
+          sector: String(mapped.sector || "").trim(),
+          accountType,
+          shares: mapped.shares,
+          averageCost: mapped.averageCost,
+          currentPrice: mapped.currentPrice,
+          expectedDividendPerShare: mapped.expectedDividendPerShare,
+          purpose: "",
+          reasonForHolding: "",
+          sellConditions: "",
+          nextCheckPoints: "",
+          memo: "",
+          source: {
+            type: "csv",
+            importedAt: new Date().toISOString(),
+            fileName,
+            broker
+          }
+        });
+      });
+    }
+
+    async function readCsvFile(file) {
+      const text = await file.text();
+      return parseCsv(text);
+    }
+
+    // ===== プロンプト =====
+    function buildProfileText() {
+      const p = state.profile;
+      return `
+投資目的：${p.purpose}
+投資期間：${p.period}
+リスク許容度：${p.riskTolerance}
+重視すること：${p.focus}
+避けたいこと：${p.avoid}
+`.trim();
+    }
+
+    function formatHoldingForPrompt(h) {
+      if (!h) return "対象銘柄が選択されていません。";
+      return `
+銘柄コード：${h.code}
+企業名：${h.name}
+業種：${h.sector}
+口座区分：${h.accountType}
+保有株数：${h.shares}
+平均取得単価：${h.averageCost}
+現在株価：${h.currentPrice}
+評価額：${yen(h.marketValue)}
+評価損益：${yen(h.unrealizedGainLoss)}
+損益率：${pct(h.gainLossRate)}
+予想1株配当：${h.expectedDividendPerShare}
+配当利回り：${pct(h.dividendYield)}
+保有目的：${h.purpose}
+保有理由：${h.reasonForHolding}
+売却条件：${h.sellConditions}
+次回確認事項：${h.nextCheckPoints}
+メモ：${h.memo}
+`.trim();
+    }
+
+    function formatPortfolioForPrompt(holdings, summary) {
+      const rows = holdings.map((h, index) => `
+${index + 1}. 銘柄コード：${h.code}
+   企業名：${h.name}
+   業種：${h.sector}
+   口座区分：${h.accountType}
+   保有株数：${h.shares}
+   平均取得単価：${h.averageCost}
+   現在株価：${h.currentPrice}
+   評価額：${yen(h.marketValue)}
+   評価損益：${yen(h.unrealizedGainLoss)}
+   損益率：${pct(h.gainLossRate)}
+   配当利回り：${pct(h.dividendYield)}
+   保有目的：${h.purpose}
+`).join("\n");
+
+      return `
+投資元本：${yen(summary.totalCost)}
+評価額：${yen(summary.totalValue)}
+評価損益：${yen(summary.totalGainLoss)}
+損益率：${pct(summary.totalGainLossRate)}
+年間配当予定額：${yen(summary.annualDividend)}
+ポートフォリオ配当利回り：${pct(summary.portfolioDividendYield)}
+
+【保有銘柄一覧】
+${rows || "保有銘柄なし"}
+`.trim();
+    }
+
+    // ===== UI =====
+    const tabs = [
+      ["portfolio", "ポートフォリオ"],
+      ["csv", "CSV取り込み"],
+      ["prompt", "AI相談プロンプト"],
+      ["glossary", "投資用語辞書"],
+      ["profile", "投資方針"],
+      ["backup", "バックアップ"]
+    ];
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function renderTabs() {
+      document.getElementById("tabs").innerHTML = tabs.map(([id, label]) => `
+        <button class="${state.tab === id ? "active" : ""}" onclick="switchTab('${id}')">${label}</button>
+      `).join("");
+    }
+
+    function switchTab(tab) {
+      state.tab = tab;
+      render();
+    }
+
+    function render() {
+      renderTabs();
+      const main = document.getElementById("main");
+
+      if (state.tab === "portfolio") main.innerHTML = renderPortfolio();
+      if (state.tab === "csv") main.innerHTML = renderCsv();
+      if (state.tab === "prompt") main.innerHTML = renderPrompt();
+      if (state.tab === "glossary") main.innerHTML = renderGlossary();
+      if (state.tab === "profile") main.innerHTML = renderProfile();
+      if (state.tab === "backup") main.innerHTML = renderBackup();
+
+      bindEvents();
+    }
+
+    function renderPortfolio() {
+      const summary = calcPortfolioSummary(state.holdings);
+      return `
+        <section class="card">
+          <h2>ポートフォリオ</h2>
+          <p class="notice">${escapeHtml(state.storageStatus || "ブラウザ内にデータを保存します。定期的にバックアップしてください。")}</p>
+
+          <div class="summary">
+            <div>投資元本<br><strong>${yen(summary.totalCost)}</strong></div>
+            <div>評価額<br><strong>${yen(summary.totalValue)}</strong></div>
+            <div>評価損益<br><strong>${yen(summary.totalGainLoss)}（${pct(summary.totalGainLossRate)}）</strong></div>
+            <div>年間配当<br><strong>${yen(summary.annualDividend)}</strong></div>
+            <div>配当利回り<br><strong>${pct(summary.portfolioDividendYield)}</strong></div>
+          </div>
+
+          <h3>保有銘柄を追加</h3>
+          <div class="grid">
+            ${Object.keys(emptyHolding).map((key) => `
+              <label>${key}
+                <input data-holding-field="${key}" value="${escapeHtml(state.holdingForm[key] || "")}">
+              </label>
+            `).join("")}
+          </div>
+          <button id="saveHoldingBtn">保存</button>
+
+          <h3>保有銘柄一覧</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>コード</th>
+                  <th>企業名</th>
+                  <th>口座</th>
+                  <th>株数</th>
+                  <th>取得単価</th>
+                  <th>現在株価</th>
+                  <th>評価損益</th>
+                  <th>利回り</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${state.holdings.map((h) => `
+                  <tr>
+                    <td>${escapeHtml(h.code)}</td>
+                    <td>${escapeHtml(h.name)}</td>
+                    <td>${escapeHtml(h.accountType)}</td>
+                    <td>${escapeHtml(h.shares)}</td>
+                    <td>${escapeHtml(h.averageCost)}</td>
+                    <td>${escapeHtml(h.currentPrice)}</td>
+                    <td>${yen(h.unrealizedGainLoss)} / ${pct(h.gainLossRate)}</td>
+                    <td>${pct(h.dividendYield)}</td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="secondary" onclick="editHolding('${h.id}')">編集</button>
+                        <button class="danger" onclick="removeHolding('${h.id}')">削除</button>
+                      </div>
+                    </td>
+                  </tr>
+                `).join("") || `<tr><td colspan="9">まだ保有銘柄がありません。</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderCsv() {
+      return `
+        <section class="card">
+          <h2>証券アプリCSV取り込み</h2>
+          <p class="muted">CSVの列名が「銘柄コード」「銘柄名」「保有数量」「平均取得価額」「現在値」などに近い形式であれば、自動で対応します。</p>
+          <p class="notice">単一HTML版ではブラウザ標準機能でCSVを読み込みます。文字化けする場合は、CSVをUTF-8で保存し直してから取り込んでください。</p>
+
+          <input id="csvFileInput" type="file" accept=".csv,text/csv">
+          <button id="importCsvBtn" ${state.csvPreview.length ? "" : "disabled"}>取り込み実行</button>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>コード</th>
+                  <th>企業名</th>
+                  <th>株数</th>
+                  <th>取得単価</th>
+                  <th>現在株価</th>
+                  <th>評価額</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${state.csvPreview.map((h) => `
+                  <tr>
+                    <td>${escapeHtml(h.code)}</td>
+                    <td>${escapeHtml(h.name)}</td>
+                    <td>${escapeHtml(h.shares)}</td>
+                    <td>${escapeHtml(h.averageCost)}</td>
+                    <td>${escapeHtml(h.currentPrice)}</td>
+                    <td>${yen(h.marketValue)}</td>
+                  </tr>
+                `).join("") || `<tr><td colspan="6">CSVを選択するとプレビューが表示されます。</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderPrompt() {
+      const selectedHolding = state.holdings.find((h) => h.id === state.selectedHoldingId) || state.holdings[0];
+
+      return `
+        <section class="card">
+          <h2>目的別AI相談プロンプト</h2>
+
+          <label>テンプレート
+            <select id="selectedTemplateId">
+              ${PROMPT_TEMPLATES.map((t) => `
+                <option value="${t.id}" ${state.selectedTemplateId === t.id ? "selected" : ""}>${escapeHtml(t.category)}：${escapeHtml(t.name)}</option>
+              `).join("")}
+            </select>
+          </label>
+
+          <label>対象銘柄
+            <select id="selectedHoldingId">
+              ${state.holdings.map((h) => `
+                <option value="${h.id}" ${(selectedHolding && selectedHolding.id === h.id) ? "selected" : ""}>${escapeHtml(h.code)} ${escapeHtml(h.name)}</option>
+              `).join("")}
+            </select>
+          </label>
+
+          <label>決算メモ・資料テキスト
+            <textarea id="reportText">${escapeHtml(state.reportText)}</textarea>
+          </label>
+
+          <label>投資用語
+            <input id="glossaryTermPrompt" value="${escapeHtml(state.glossaryTerm)}" placeholder="例：ROE">
+          </label>
+
+          <button id="generatePromptBtn">プロンプト生成</button>
+          <button id="copyPromptBtn" class="secondary">コピー</button>
+
+          <label>生成プロンプト
+            <textarea id="generatedPrompt" class="large">${escapeHtml(state.generatedPrompt)}</textarea>
+          </label>
+
+          <h3>AI回答を保存</h3>
+          <label>外部AIの回答
+            <textarea id="aiResponse">${escapeHtml(state.aiResponse)}</textarea>
+          </label>
+
+          <label>自分の判断メモ
+            <textarea id="decisionMemo">${escapeHtml(state.decisionMemo)}</textarea>
+          </label>
+
+          <button id="saveAiResponseBtn">AI回答と判断メモを保存</button>
+        </section>
+      `;
+    }
+
+    function renderGlossary() {
+      const term = state.glossaryTerm || "";
+      const items = DEFAULT_GLOSSARY.filter((g) =>
+        !term ||
+        g.term.includes(term) ||
+        g.category.includes(term) ||
+        g.reading.includes(term)
+      );
+
+      return `
+        <section class="card">
+          <h2>投資用語辞書</h2>
+          <input id="glossarySearch" placeholder="用語検索" value="${escapeHtml(term)}">
+
+          <div class="glossary">
+            ${items.map((g) => `
+              <article>
+                <h3>${escapeHtml(g.term)}</h3>
+                <p><strong>読み：</strong>${escapeHtml(g.reading)}</p>
+                <p><strong>カテゴリ：</strong>${escapeHtml(g.category)}</p>
+                <p><strong>ひとことで：</strong>${escapeHtml(g.shortDescription)}</p>
+                <p><strong>計算式：</strong>${escapeHtml(g.formula)}</p>
+                <p><strong>見方：</strong>${escapeHtml(g.howToRead)}</p>
+                <p><strong>注意点：</strong>${escapeHtml(g.caution)}</p>
+                <p><strong>資料で見る場所：</strong>${escapeHtml(g.whereToFind)}</p>
+              </article>
+            `).join("") || `<p>該当する用語がありません。</p>`}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderProfile() {
+      return `
+        <section class="card">
+          <h2>投資方針プロフィール</h2>
+          ${["purpose", "period", "riskTolerance", "focus", "avoid"].map((key) => `
+            <label>${key}
+              <input data-profile-field="${key}" value="${escapeHtml(state.profile[key] || "")}">
+            </label>
+          `).join("")}
+          <button id="saveProfileBtn">保存</button>
+        </section>
+      `;
+    }
+
+    function renderBackup() {
+      return `
+        <section class="card">
+          <h2>バックアップ / 復元</h2>
+          <p class="notice">ブラウザ保存は消える可能性があるため、定期的にJSONバックアップを作成してください。</p>
+          <button id="backupBtn">JSONを書き出し</button>
+          <label>JSONを読み込み
+            <input id="restoreInput" type="file" accept="application/json">
+          </label>
+
+          <h3>保存情報</h3>
+          <ul>
+            <li>DB名：<code>${escapeHtml(DB_NAME)}</code></li>
+            <li>環境識別子：<code>${escapeHtml(ENV_SUFFIX)}</code></li>
+            <li>${escapeHtml(state.storageStatus || "持続的ストレージ申請は起動時に実行されます。")}</li>
+          </ul>
+        </section>
+      `;
+    }
+
+    function bindEvents() {
+      document.querySelectorAll("[data-holding-field]").forEach((input) => {
+        input.addEventListener("input", (event) => {
+          state.holdingForm[event.target.dataset.holdingField] = event.target.value;
+        });
+      });
+
+      document.querySelectorAll("[data-profile-field]").forEach((input) => {
+        input.addEventListener("input", (event) => {
+          state.profile[event.target.dataset.profileField] = event.target.value;
+        });
+      });
+
+      const saveHoldingBtn = document.getElementById("saveHoldingBtn");
+      if (saveHoldingBtn) {
+        saveHoldingBtn.addEventListener("click", saveHolding);
+      }
+
+      const csvFileInput = document.getElementById("csvFileInput");
+      if (csvFileInput) {
+        csvFileInput.addEventListener("change", handleCsvFile);
+      }
+
+      const importCsvBtn = document.getElementById("importCsvBtn");
+      if (importCsvBtn) {
+        importCsvBtn.addEventListener("click", importCsvPreview);
+      }
+
+      const selectedTemplateId = document.getElementById("selectedTemplateId");
+      if (selectedTemplateId) {
+        selectedTemplateId.addEventListener("change", (event) => {
+          state.selectedTemplateId = event.target.value;
+        });
+      }
+
+      const selectedHoldingId = document.getElementById("selectedHoldingId");
+      if (selectedHoldingId) {
+        selectedHoldingId.addEventListener("change", (event) => {
+          state.selectedHoldingId = event.target.value;
+        });
+      }
+
+      const reportText = document.getElementById("reportText");
+      if (reportText) {
+        reportText.addEventListener("input", (event) => {
+          state.reportText = event.target.value;
+        });
+      }
+
+      const glossaryTermPrompt = document.getElementById("glossaryTermPrompt");
+      if (glossaryTermPrompt) {
+        glossaryTermPrompt.addEventListener("input", (event) => {
+          state.glossaryTerm = event.target.value;
+        });
+      }
+
+      const generatedPrompt = document.getElementById("generatedPrompt");
+      if (generatedPrompt) {
+        generatedPrompt.addEventListener("input", (event) => {
+          state.generatedPrompt = event.target.value;
+        });
+      }
+
+      const aiResponse = document.getElementById("aiResponse");
+      if (aiResponse) {
+        aiResponse.addEventListener("input", (event) => {
+          state.aiResponse = event.target.value;
+        });
+      }
+
+      const decisionMemo = document.getElementById("decisionMemo");
+      if (decisionMemo) {
+        decisionMemo.addEventListener("input", (event) => {
+          state.decisionMemo = event.target.value;
+        });
+      }
+
+      const generatePromptBtn = document.getElementById("generatePromptBtn");
+      if (generatePromptBtn) {
+        generatePromptBtn.addEventListener("click", generatePrompt);
+      }
+
+      const copyPromptBtn = document.getElementById("copyPromptBtn");
+      if (copyPromptBtn) {
+        copyPromptBtn.addEventListener("click", copyPrompt);
+      }
+
+      const saveAiResponseBtn = document.getElementById("saveAiResponseBtn");
+      if (saveAiResponseBtn) {
+        saveAiResponseBtn.addEventListener("click", saveAiResponse);
+      }
+
+      const glossarySearch = document.getElementById("glossarySearch");
+      if (glossarySearch) {
+        glossarySearch.addEventListener("input", (event) => {
+          state.glossaryTerm = event.target.value;
+          render();
+        });
+      }
+
+      const saveProfileBtn = document.getElementById("saveProfileBtn");
+      if (saveProfileBtn) {
+        saveProfileBtn.addEventListener("click", saveProfile);
+      }
+
+      const backupBtn = document.getElementById("backupBtn");
+      if (backupBtn) {
+        backupBtn.addEventListener("click", backup);
+      }
+
+      const restoreInput = document.getElementById("restoreInput");
+      if (restoreInput) {
+        restoreInput.addEventListener("change", restore);
+      }
+    }
+
+    // ===== 操作 =====
+    async function saveHolding() {
+      const record = await putItem("holdings", calcHolding(state.holdingForm));
+      state.holdings = [
+        ...state.holdings.filter((h) => h.id !== record.id),
+        record
+      ];
+      state.holdingForm = { ...emptyHolding };
+      render();
+    }
+
+    function editHolding(id) {
+      const target = state.holdings.find((h) => h.id === id);
+      if (!target) return;
+      state.holdingForm = { ...emptyHolding, ...target };
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      render();
+    }
+
+    async function removeHolding(id) {
+      if (!confirm("この銘柄を削除しますか？")) return;
+      await deleteItem("holdings", id);
+      state.holdings = state.holdings.filter((h) => h.id !== id);
+      render();
+    }
+
+    async function handleCsvFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const rows = await readCsvFile(file);
+      state.csvPreview = mapCsvRowsToHoldings(rows, file.name);
+      render();
+    }
+
+    async function importCsvPreview() {
+      for (const h of state.csvPreview) {
+        await putItem("holdings", h);
+      }
+
+      await putItem("importHistory", {
+        id: crypto.randomUUID(),
+        importedAt: new Date().toISOString(),
+        rowCount: state.csvPreview.length,
+        importedCount: state.csvPreview.length
+      });
+
+      state.holdings = await getAll("holdings");
+      state.csvPreview = [];
+      alert("CSVを取り込みました。");
+      render();
+    }
+
+    function generatePrompt() {
+      const summary = calcPortfolioSummary(state.holdings);
+      const selectedHolding =
+        state.holdings.find((h) => h.id === state.selectedHoldingId) ||
+        state.holdings[0];
+
+      const template = PROMPT_TEMPLATES.find((t) => t.id === state.selectedTemplateId);
+      if (!template) return;
+
+      state.generatedPrompt = template.build({
+        profileText: buildProfileText(),
+        portfolioText: formatPortfolioForPrompt(state.holdings, summary),
+        selectedHoldingText: formatHoldingForPrompt(selectedHolding),
+        reportText: state.reportText,
+        glossaryTerm: state.glossaryTerm
+      });
+
+      render();
+    }
+
+    async function copyPrompt() {
+      if (!state.generatedPrompt) return;
+      try {
+        await navigator.clipboard.writeText(state.generatedPrompt);
+        alert("コピーしました。");
+      } catch {
+        const textArea = document.createElement("textarea");
+        textArea.value = state.generatedPrompt;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        alert("コピーしました。");
+      }
+    }
+
+    async function saveAiResponse() {
+      await putItem("aiResponses", {
+        id: crypto.randomUUID(),
+        date: new Date().toISOString(),
+        templateId: state.selectedTemplateId,
+        prompt: state.generatedPrompt,
+        response: state.aiResponse,
+        decisionMemo: state.decisionMemo
+      });
+
+      state.aiResponse = "";
+      state.decisionMemo = "";
+      alert("AI回答と判断メモを保存しました。");
+      render();
+    }
+
+    async function saveProfile() {
+      const saved = await putItem("profile", { ...state.profile, id: "main" });
+      state.profile = saved;
+      alert("投資方針プロフィールを保存しました。");
+      render();
+    }
+
+    async function backup() {
+      const data = await exportAllData();
+      const text = JSON.stringify(data, null, 2);
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const date = new Date().toLocaleDateString("ja-JP", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).replaceAll("/", "");
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `InvestmentAiNote_Backup_${date}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function restore(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        await importAllData(JSON.parse(text));
+        await loadInitialData();
+        alert("バックアップを読み込みました。");
+        render();
+      } catch (error) {
+        alert("読み込みに失敗しました。バックアップファイルを確認してください。");
+      }
+    }
+
+    async function loadInitialData() {
+      state.holdings = await getAll("holdings");
+      const profiles = await getAll("profile");
+      state.profile = profiles[0] || { ...defaultProfile };
+    }
+
+    async function boot() {
+      render();
+      await requestPersistentStorage();
+      await loadInitialData();
+      render();
+    }
+
+    boot();
+  </script>
+</body>
+</html>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-slate-50 text-slate-800">
