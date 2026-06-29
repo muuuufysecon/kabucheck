@@ -299,6 +299,16 @@
       background: white;
     }
 
+    .trade-buy {
+      color: #1d4ed8;
+      font-weight: 800;
+    }
+
+    .trade-sell {
+      color: #b91c1c;
+      font-weight: 800;
+    }
+
     .hidden {
       display: none;
     }
@@ -335,6 +345,7 @@
     const DB_VERSION = 1;
     const STORES = [
       "holdings",
+      "transactions",
       "watchlist",
       "reports",
       "aiResponses",
@@ -650,6 +661,16 @@ ${reportText}
       decisionMemo: "",
       aiResponses: [],
       reports: [],
+      transactions: [],
+      transactionForm: {
+        date: new Date().toISOString().slice(0, 10),
+        holdingId: "",
+        type: "buy",
+        quantity: "",
+        price: "",
+        fee: "",
+        memo: ""
+      },
       detailReportFileName: "",
       detailReportFileText: "",
       detailReportMemo: "",
@@ -1072,6 +1093,7 @@ ${rows || "保有銘柄なし"}
     const tabs = [
       ["portfolio", "ポートフォリオ"],
       ["csv", "CSV取り込み"],
+      ["transactions", "購入売却履歴"],
       ["prompt", "AI相談プロンプト"],
       ["history", "AI回答履歴"],
       ["glossary", "投資用語辞書"],
@@ -1110,6 +1132,7 @@ ${rows || "保有銘柄なし"}
 
       if (state.tab === "portfolio") main.innerHTML = renderPortfolio();
       if (state.tab === "csv") main.innerHTML = renderCsv();
+      if (state.tab === "transactions") main.innerHTML = renderTransactions();
       if (state.tab === "prompt") main.innerHTML = renderPrompt();
       if (state.tab === "history") main.innerHTML = renderHistory();
       if (state.tab === "glossary") main.innerHTML = renderGlossary();
@@ -1307,7 +1330,7 @@ ${rows || "保有銘柄なし"}
       const reports = getHoldingReports(holding);
 
       return `
-        <section class="card holding-detail">
+        <section id="holdingDetail" class="card holding-detail">
           <div class="portfolio-toolbar">
             <div>
               <h2>${escapeHtml(holding.code)} ${escapeHtml(holding.name)}</h2>
@@ -1486,6 +1509,42 @@ ${rows || "保有銘柄なし"}
       `;
     }
 
+    function getTransactionHolding(transaction) {
+      return state.holdings.find((h) => h.id === transaction.holdingId) || null;
+    }
+
+    function transactionAmount(transaction) {
+      const gross = toNumber(transaction.quantity) * toNumber(transaction.price);
+      const fee = toNumber(transaction.fee);
+      return transaction.type === "buy" ? gross + fee : gross - fee;
+    }
+
+    function renderTransactions() {
+      const buyTotal = state.transactions
+        .filter((t) => t.type === "buy")
+        .reduce((sum, t) => sum + transactionAmount(t), 0);
+      const sellTotal = state.transactions
+        .filter((t) => t.type === "sell")
+        .reduce((sum, t) => sum + transactionAmount(t), 0);
+      const selectedHolding = state.holdings.find((h) => h.id === state.transactionForm.holdingId) || state.holdings[0];
+
+      return `<br>        <section class="card"><br>          <h2>購入売却履歴</h2><br>          <p class="muted">保有銘柄ごとの購入・売却を記録し、後から取引履歴を確認できます。</p><br><br>          <div class="summary"><br>            <div>取引件数<br><strong>${state.transactions.length}</strong></div><br>            <div>購入合計<br><strong>${yen(buyTotal)}</strong></div><br>            <div>売却合計<br><strong>${yen(sellTotal)}</strong></div><br>            <div>差引<br><strong class="${sellTotal - buyTotal >= 0 ? "positive" : "negative"}">${yen(sellTotal - buyTotal)}</strong></div><br>          </div><br><br>          <h3>取引を追加</h3><br>          <div class="grid"><br>            <label>日付<br>              <input type="date" data-transaction-field="date" value="${escapeHtml(state.transactionForm.date)}"><br>            </label><br>            <label>銘柄<br>              <select data-transaction-field="holdingId"><br>                ${state.holdings.map((h) => `
+                  <option value="${h.id}" ${(selectedHolding && selectedHolding.id === h.id) ? "selected" : ""}>${escapeHtml(h.code)} ${escapeHtml(h.name)}</option>
+                `).join("")}<br>              </select><br>            </label><br>            <label>区分<br>              <select data-transaction-field="type"><br>                <option value="buy" ${state.transactionForm.type === "buy" ? "selected" : ""}>購入</option><br>                <option value="sell" ${state.transactionForm.type === "sell" ? "selected" : ""}>売却</option><br>              </select><br>            </label><br>            <label>数量<br>              <input data-transaction-field="quantity" value="${escapeHtml(state.transactionForm.quantity)}" placeholder="例：100"><br>            </label><br>            <label>単価<br>              <input data-transaction-field="price" value="${escapeHtml(state.transactionForm.price)}" placeholder="例：1500"><br>            </label><br>            <label>手数料・税等<br>              <input data-transaction-field="fee" value="${escapeHtml(state.transactionForm.fee)}" placeholder="例：0"><br>            </label><br>          </div><br>          <label>メモ<br>            <textarea data-transaction-field="memo" placeholder="購入理由、売却理由、反省点など">${escapeHtml(state.transactionForm.memo)}</textarea><br>          </label><br>          <button id="saveTransactionBtn">取引を保存</button><br><br>          <h3>取引履歴</h3><br>          <div class="table-wrap"><br>            <table><br>              <thead><br>                <tr><br>                  <th>日付</th><br>                  <th>区分</th><br>                  <th>銘柄</th><br>                  <th>数量</th><br>                  <th>単価</th><br>                  <th>手数料等</th><br>                  <th>金額</th><br>                  <th>メモ</th><br>                  <th>操作</th><br>                </tr><br>              </thead><br>              <tbody><br>                ${state.transactions<br>                  .slice()<br>                  .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))<br>                  .map((t) => {<br>                    const holding = getTransactionHolding(t);<br>                    return `
+                      <tr>
+                        <td>${escapeHtml(t.date || "-")}</td>
+                        <td><span class="${t.type === "buy" ? "trade-buy" : "trade-sell"}">${t.type === "buy" ? "購入" : "売却"}</span></td>
+                        <td>${escapeHtml(holding ? `${holding.code} ${holding.name}` : (t.holdingName || "未設定"))}</td>
+                        <td>${escapeHtml(t.quantity || "-")}</td>
+                        <td>${yen(t.price)}</td>
+                        <td>${yen(t.fee)}</td>
+                        <td><strong>${yen(transactionAmount(t))}</strong></td>
+                        <td>${escapeHtml(t.memo || "")}</td>
+                        <td><button class="danger" onclick="deleteTransaction('${t.id}')">削除</button></td>
+                      </tr>
+                    `;<br>                  }).join("") || `<tr><td colspan="9">取引履歴はまだありません。</td></tr>`}<br>              </tbody><br>            </table><br>          </div><br>        </section><br>      `;
+    }
+
     function getTemplateName(templateId) {
       const template = PROMPT_TEMPLATES.find((t) => t.id === templateId);
       return template ? `${template.category}：${template.name}` : (templateId || "未分類");
@@ -1618,6 +1677,20 @@ ${rows || "保有銘柄なし"}
           state.profile[event.target.dataset.profileField] = event.target.value;
         });
       });
+
+      document.querySelectorAll("[data-transaction-field]").forEach((input) => {
+        input.addEventListener("input", (event) => {
+          state.transactionForm[event.target.dataset.transactionField] = event.target.value;
+        });
+        input.addEventListener("change", (event) => {
+          state.transactionForm[event.target.dataset.transactionField] = event.target.value;
+        });
+      });
+
+      const saveTransactionBtn = document.getElementById("saveTransactionBtn");
+      if (saveTransactionBtn) {
+        saveTransactionBtn.addEventListener("click", saveTransaction);
+      }
 
       const saveHoldingBtn = document.getElementById("saveHoldingBtn");
       if (saveHoldingBtn) {
@@ -1760,6 +1833,12 @@ ${rows || "保有銘柄なし"}
       state.selectedHoldingDetailId = id;
       state.portfolioView = "list";
       render();
+      setTimeout(() => {
+        const detail = document.getElementById("holdingDetail");
+        if (detail) {
+          detail.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 0);
     }
 
     function closeHoldingDetail() {
@@ -1820,6 +1899,44 @@ ${rows || "保有銘柄なし"}
         record
       ];
       state.holdingForm = { ...emptyHolding };
+      render();
+    }
+
+    async function saveTransaction() {
+      const holding =
+        state.holdings.find((h) => h.id === state.transactionForm.holdingId) ||
+        state.holdings[0];
+
+      const saved = await putItem("transactions", {
+        ...state.transactionForm,
+        holdingId: holding ? holding.id : "",
+        holdingCode: holding ? holding.code : "",
+        holdingName: holding ? holding.name : "",
+        id: crypto.randomUUID(),
+        date: state.transactionForm.date || new Date().toISOString().slice(0, 10)
+      });
+
+      state.transactions = [
+        saved,
+        ...state.transactions.filter((transaction) => transaction.id !== saved.id)
+      ];
+      state.transactionForm = {
+        date: new Date().toISOString().slice(0, 10),
+        holdingId: holding ? holding.id : "",
+        type: "buy",
+        quantity: "",
+        price: "",
+        fee: "",
+        memo: ""
+      };
+      alert("取引履歴を保存しました。");
+      render();
+    }
+
+    async function deleteTransaction(id) {
+      if (!confirm("この取引履歴を削除しますか？")) return;
+      await deleteItem("transactions", id);
+      state.transactions = state.transactions.filter((transaction) => transaction.id !== id);
       render();
     }
 
@@ -1965,6 +2082,7 @@ ${rows || "保有銘柄なし"}
 
     async function loadInitialData() {
       state.holdings = await getAll("holdings");
+      state.transactions = await getAll("transactions");
       state.aiResponses = await getAll("aiResponses");
       state.reports = await getAll("reports");
       const profiles = await getAll("profile");
