@@ -97,6 +97,77 @@
       font-size: 1.1rem;
     }
 
+    .portfolio-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 14px 0;
+    }
+
+    .view-switch {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .metric-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .metric-card h3 {
+      margin-top: 0;
+      margin-bottom: 10px;
+    }
+
+    .bar-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 120px 1fr 92px;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9rem;
+    }
+
+    .bar-track {
+      background: #e2e8f0;
+      border-radius: 999px;
+      height: 10px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      background: #1f6feb;
+      border-radius: 999px;
+      height: 100%;
+      min-width: 3px;
+    }
+
+    .positive {
+      color: #15803d;
+      font-weight: 800;
+    }
+
+    .negative {
+      color: #dc2626;
+      font-weight: 800;
+    }
+
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -527,6 +598,7 @@ ${reportText}
 
     const state = {
       tab: "portfolio",
+      portfolioView: "dashboard",
       holdings: [],
       profile: { ...defaultProfile },
       holdingForm: { ...emptyHolding },
@@ -980,6 +1052,11 @@ ${rows || "保有銘柄なし"}
       render();
     }
 
+    function setPortfolioView(view) {
+      state.portfolioView = view;
+      render();
+    }
+
     function render() {
       renderTabs();
       const main = document.getElementById("main");
@@ -996,15 +1073,45 @@ ${rows || "保有銘柄なし"}
 
     function renderPortfolio() {
       const summary = calcPortfolioSummary(state.holdings);
+      if (state.portfolioView === "dashboard") {
+        return '<section class="card">' +
+          '<div class="portfolio-toolbar">' +
+          '<div><h2>ポートフォリオ</h2><p class="muted">一覧管理とダッシュボード表示を切り替えられます。</p></div>' +
+          '<div class="view-switch">' +
+          '<button class="active" onclick="setPortfolioView(\\'dashboard\\')">ダッシュボード</button>' +
+          '<button class="secondary" onclick="setPortfolioView(\\'list\\')">一覧・編集</button>' +
+          '</div></div>' +
+          '<p class="notice">' + escapeHtml(state.storageStatus || "ブラウザ内にデータを保存します。定期的にバックアップしてください。") + '</p>' +
+          '<div class="summary">' +
+          '<div>投資元本<br><strong>' + yen(summary.totalCost) + '</strong></div>' +
+          '<div>評価額<br><strong>' + yen(summary.totalValue) + '</strong></div>' +
+          '<div>評価損益<br><strong class="' + (summary.totalGainLoss >= 0 ? "positive" : "negative") + '">' + yen(summary.totalGainLoss) + '（' + pct(summary.totalGainLossRate) + '）</strong></div>' +
+          '<div>年間配当<br><strong>' + yen(summary.annualDividend) + '</strong></div>' +
+          '<div>配当利回り<br><strong>' + pct(summary.portfolioDividendYield) + '</strong></div>' +
+          '</div>' +
+          renderPortfolioDashboard(summary) +
+          '</section>';
+      }
+
       return `
         <section class="card">
-          <h2>ポートフォリオ</h2>
+          <div class="portfolio-toolbar">
+            <div>
+              <h2>ポートフォリオ</h2>
+              <p class="muted">一覧管理とダッシュボード表示を切り替えられます。</p>
+            </div>
+            <div class="view-switch">
+              <button class="${state.portfolioView === "dashboard" ? "active" : "secondary"}" onclick="setPortfolioView('dashboard')">ダッシュボード</button>
+              <button class="${state.portfolioView === "list" ? "active" : "secondary"}" onclick="setPortfolioView('list')">一覧・編集</button>
+            </div>
+          </div>
+
           <p class="notice">${escapeHtml(state.storageStatus || "ブラウザ内にデータを保存します。定期的にバックアップしてください。")}</p>
 
           <div class="summary">
             <div>投資元本<br><strong>${yen(summary.totalCost)}</strong></div>
             <div>評価額<br><strong>${yen(summary.totalValue)}</strong></div>
-            <div>評価損益<br><strong>${yen(summary.totalGainLoss)}（${pct(summary.totalGainLossRate)}）</strong></div>
+            <div>評価損益<br><strong class="${summary.totalGainLoss >= 0 ? "positive" : "negative"}">${yen(summary.totalGainLoss)}（${pct(summary.totalGainLossRate)}）</strong></div>
             <div>年間配当<br><strong>${yen(summary.annualDividend)}</strong></div>
             <div>配当利回り<br><strong>${pct(summary.portfolioDividendYield)}</strong></div>
           </div>
@@ -1065,6 +1172,60 @@ ${rows || "保有銘柄なし"}
           </div>
         </section>
       `;
+    }
+
+    function renderRatioRow(label, ratio) {
+      return '<div class="bar-row">' +
+        '<span>' + escapeHtml(label) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(ratio, 1) + '%"></div></div>' +
+        '<strong>' + pct(ratio) + '</strong>' +
+        '</div>';
+    }
+
+    function renderPortfolioDashboard(summary) {
+      const totalValue = Math.max(toNumber(summary.totalValue), 1);
+      const sectorMap = {};
+      const accountMap = {};
+      const topHoldings = [...state.holdings]
+        .sort((a, b) => toNumber(b.marketValue) - toNumber(a.marketValue))
+        .slice(0, 5);
+
+      state.holdings.forEach((h) => {
+        const sector = h.sector || "未設定";
+        const account = h.accountType || "未設定";
+        sectorMap[sector] = (sectorMap[sector] || 0) + toNumber(h.marketValue);
+        accountMap[account] = (accountMap[account] || 0) + toNumber(h.marketValue);
+      });
+
+      const topHoldingRows = topHoldings.map((h) => {
+        const ratio = (toNumber(h.marketValue) / totalValue) * 100;
+        return renderRatioRow(h.code || h.name || "未設定", ratio);
+      }).join("") || '<p class="muted">まだ保有銘柄がありません。</p>';
+
+      const sectorRows = Object.entries(sectorMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([sector, value]) => renderRatioRow(sector, (toNumber(value) / totalValue) * 100))
+        .join("") || '<p class="muted">業種データがありません。</p>';
+
+      const accountRows = Object.entries(accountMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([account, value]) => renderRatioRow(account, (toNumber(value) / totalValue) * 100))
+        .join("") || '<p class="muted">口座区分データがありません。</p>';
+
+      return '<div class="dashboard-grid">' +
+        '<div class="metric-card"><h3>構成比トップ5</h3><div class="bar-list">' + topHoldingRows + '</div></div>' +
+        '<div class="metric-card"><h3>業種別バランス</h3><div class="bar-list">' + sectorRows + '</div></div>' +
+        '<div class="metric-card"><h3>口座区分</h3><div class="bar-list">' + accountRows + '</div></div>' +
+        '<div class="metric-card"><h3>損益チェック</h3>' +
+        '<p>評価損益：<strong class="' + (summary.totalGainLoss >= 0 ? "positive" : "negative") + '">' + yen(summary.totalGainLoss) + '</strong></p>' +
+        '<p>損益率：<strong class="' + (summary.totalGainLossRate >= 0 ? "positive" : "negative") + '">' + pct(summary.totalGainLossRate) + '</strong></p>' +
+        '<p>年間配当予定：<strong>' + yen(summary.annualDividend) + '</strong></p>' +
+        '<p class="muted">配当利回り・業種偏り・上位銘柄への集中度を見ながら、次の確認事項を整理します。</p>' +
+        '</div></div>';
+    }
+
+    function renderPortfolioList() {
+      return "";
     }
 
     function renderCsv() {
