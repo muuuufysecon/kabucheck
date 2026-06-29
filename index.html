@@ -174,6 +174,42 @@
       gap: 12px;
     }
 
+    .transaction-form {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    .transaction-form label {
+      margin: 0;
+    }
+
+    .transaction-form .wide {
+      grid-column: span 2;
+    }
+
+    .transaction-form .full {
+      grid-column: 1 / -1;
+    }
+
+    @media (max-width: 980px) {
+      .transaction-form {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 560px) {
+      .transaction-form {
+        grid-template-columns: 1fr;
+      }
+
+      .transaction-form .wide,
+      .transaction-form .full {
+        grid-column: auto;
+      }
+    }
+
     label {
       display: grid;
       gap: 6px;
@@ -1552,7 +1588,7 @@ ${rows || "保有銘柄なし"}
             '</tr>';
         }).join("") || '<tr><td colspan="9">取引履歴はまだありません。</td></tr>';
 
-      return `<br>        <section class="card"><br>          <h2>購入売却履歴</h2><br>          <p class="muted">保有銘柄ごとの購入・売却を記録し、後から取引履歴を確認できます。</p><br><br>          <div class="summary"><br>            <div>取引件数<br><strong>${state.transactions.length}</strong></div><br>            <div>購入合計<br><strong>${yen(buyTotal)}</strong></div><br>            <div>売却合計<br><strong>${yen(sellTotal)}</strong></div><br>            <div>差引<br><strong class="${sellTotal - buyTotal >= 0 ? "positive" : "negative"}">${yen(sellTotal - buyTotal)}</strong></div><br>          </div><br><br>          <h3>取引を追加</h3><br>          <div class="grid"><br>            <label>日付<br>              <input type="date" data-transaction-field="date" value="${escapeHtml(state.transactionForm.date)}"><br>            </label><br>            <label>銘柄<br>              <select data-transaction-field="holdingId"><br>                ${holdingOptions}<br>              </select><br>            </label><br>            <label>区分<br>              <select data-transaction-field="type"><br>                <option value="buy" ${state.transactionForm.type === "buy" ? "selected" : ""}>購入</option><br>                <option value="sell" ${state.transactionForm.type === "sell" ? "selected" : ""}>売却</option><br>              </select><br>            </label><br>            <label>数量<br>              <input data-transaction-field="quantity" value="${escapeHtml(state.transactionForm.quantity)}" placeholder="例：100"><br>            </label><br>            <label>単価<br>              <input data-transaction-field="price" value="${escapeHtml(state.transactionForm.price)}" placeholder="例：1500"><br>            </label><br>            <label>手数料・税等<br>              <input data-transaction-field="fee" value="${escapeHtml(state.transactionForm.fee)}" placeholder="例：0"><br>            </label><br>          </div><br>          <label>メモ<br>            <textarea data-transaction-field="memo" placeholder="購入理由、売却理由、反省点など">${escapeHtml(state.transactionForm.memo)}</textarea><br>          </label><br>          <button id="saveTransactionBtn">取引を保存</button><br><br>          <h3>取引履歴</h3><br>          <div class="table-wrap"><br>            <table><br>              <thead><br>                <tr><br>                  <th>日付</th><br>                  <th>区分</th><br>                  <th>銘柄</th><br>                  <th>数量</th><br>                  <th>単価</th><br>                  <th>手数料等</th><br>                  <th>金額</th><br>                  <th>メモ</th><br>                  <th>操作</th><br>                </tr><br>              </thead><br>              <tbody><br>                ${transactionRows}<br>              </tbody><br>            </table><br>          </div><br>        </section><br>      `;
+      return `<br>        <section class="card"><br>          <h2>購入売却履歴</h2><br>          <p class="muted">保有銘柄ごとの購入・売却を記録し、後から取引履歴を確認できます。</p><br><br>          <div class="summary"><br>            <div>取引件数<br><strong>${state.transactions.length}</strong></div><br>            <div>購入合計<br><strong>${yen(buyTotal)}</strong></div><br>            <div>売却合計<br><strong>${yen(sellTotal)}</strong></div><br>            <div>差引<br><strong class="${sellTotal - buyTotal >= 0 ? "positive" : "negative"}">${yen(sellTotal - buyTotal)}</strong></div><br>          </div><br><br>          <h3>取引を追加</h3><br>          <div class="transaction-form"><br>            <label>日付<br>              <input type="date" data-transaction-field="date" value="${escapeHtml(state.transactionForm.date)}"><br>            </label><br>            <label class="wide">銘柄<br>              <select data-transaction-field="holdingId"><br>                ${holdingOptions}<br>              </select><br>            </label><br>            <label>区分<br>              <select data-transaction-field="type"><br>                <option value="buy" ${state.transactionForm.type === "buy" ? "selected" : ""}>購入</option><br>                <option value="sell" ${state.transactionForm.type === "sell" ? "selected" : ""}>売却</option><br>              </select><br>            </label><br>            <label>数量<br>              <input data-transaction-field="quantity" value="${escapeHtml(state.transactionForm.quantity)}" placeholder="例：100"><br>            </label><br>            <label>単価<br>              <input data-transaction-field="price" value="${escapeHtml(state.transactionForm.price)}" placeholder="例：1500"><br>            </label><br>            <label>手数料・税等<br>              <input data-transaction-field="fee" value="${escapeHtml(state.transactionForm.fee)}" placeholder="例：0"><br>            </label><br>            <label class="full">メモ<br>              <textarea data-transaction-field="memo" placeholder="購入理由、売却理由、反省点など">${escapeHtml(state.transactionForm.memo)}</textarea><br>            </label><br>          </div><br>          <button id="saveTransactionBtn">取引を保存</button><br><br>          <h3>取引履歴</h3><br>          <div class="table-wrap"><br>            <table><br>              <thead><br>                <tr><br>                  <th>日付</th><br>                  <th>区分</th><br>                  <th>銘柄</th><br>                  <th>数量</th><br>                  <th>単価</th><br>                  <th>手数料等</th><br>                  <th>金額</th><br>                  <th>メモ</th><br>                  <th>操作</th><br>                </tr><br>              </thead><br>              <tbody><br>                ${transactionRows}<br>              </tbody><br>            </table><br>          </div><br>        </section><br>      `;
     }
 
     function getTemplateName(templateId) {
