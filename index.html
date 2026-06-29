@@ -261,6 +261,44 @@
       gap: 4px;
     }
 
+    .history-controls {
+      display: grid;
+      grid-template-columns: 1fr minmax(180px, 260px);
+      gap: 12px;
+      margin: 14px 0;
+    }
+
+    .history-detail {
+      max-width: 360px;
+      white-space: pre-wrap;
+    }
+
+    .history-detail summary {
+      color: #1f6feb;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .holding-detail {
+      margin-top: 18px;
+      border: 1px solid #dbeafe;
+      background: #f8fbff;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .file-box {
+      border: 1px dashed #94a3b8;
+      border-radius: 14px;
+      padding: 14px;
+      background: white;
+    }
+
     .hidden {
       display: none;
     }
@@ -603,12 +641,20 @@ ${reportText}
       profile: { ...defaultProfile },
       holdingForm: { ...emptyHolding },
       selectedHoldingId: "",
+      selectedHoldingDetailId: "",
       selectedTemplateId: "portfolio_review",
       reportText: "",
       glossaryTerm: "",
       generatedPrompt: "",
       aiResponse: "",
       decisionMemo: "",
+      aiResponses: [],
+      reports: [],
+      detailReportFileName: "",
+      detailReportFileText: "",
+      detailReportMemo: "",
+      historySearch: "",
+      historyTemplate: "all",
       csvPreview: [],
       csvEncoding: "AUTO",
       storageStatus: ""
@@ -1027,6 +1073,7 @@ ${rows || "保有銘柄なし"}
       ["portfolio", "ポートフォリオ"],
       ["csv", "CSV取り込み"],
       ["prompt", "AI相談プロンプト"],
+      ["history", "AI回答履歴"],
       ["glossary", "投資用語辞書"],
       ["profile", "投資方針"],
       ["backup", "バックアップ"]
@@ -1064,6 +1111,7 @@ ${rows || "保有銘柄なし"}
       if (state.tab === "portfolio") main.innerHTML = renderPortfolio();
       if (state.tab === "csv") main.innerHTML = renderCsv();
       if (state.tab === "prompt") main.innerHTML = renderPrompt();
+      if (state.tab === "history") main.innerHTML = renderHistory();
       if (state.tab === "glossary") main.innerHTML = renderGlossary();
       if (state.tab === "profile") main.innerHTML = renderProfile();
       if (state.tab === "backup") main.innerHTML = renderBackup();
@@ -1161,6 +1209,7 @@ ${rows || "保有銘柄なし"}
                     <td>${escapeHtml(h.settlementDate || "-")}</td>
                     <td>
                       <div class="row-actions">
+                        <button onclick="openHoldingDetail('${h.id}')">詳細</button>
                         <button class="secondary" onclick="editHolding('${h.id}')">編集</button>
                         <button class="danger" onclick="removeHolding('${h.id}')">削除</button>
                       </div>
@@ -1170,6 +1219,7 @@ ${rows || "保有銘柄なし"}
               </tbody>
             </table>
           </div>
+          ${renderHoldingDetail()}
         </section>
       `;
     }
@@ -1222,6 +1272,116 @@ ${rows || "保有銘柄なし"}
         '<p>年間配当予定：<strong>' + yen(summary.annualDividend) + '</strong></p>' +
         '<p class="muted">配当利回り・業種偏り・上位銘柄への集中度を見ながら、次の確認事項を整理します。</p>' +
         '</div></div>';
+    }
+
+    function getSelectedDetailHolding() {
+      return state.holdings.find((h) => h.id === state.selectedHoldingDetailId) || null;
+    }
+
+    function getRelatedAiResponses(holding) {
+      if (!holding) return [];
+      const code = String(holding.code || "").toLowerCase();
+      const name = String(holding.name || "").toLowerCase();
+      return state.aiResponses
+        .filter((item) => {
+          if (item.holdingId && item.holdingId === holding.id) return true;
+          if (item.holdingCode && code && String(item.holdingCode).toLowerCase() === code) return true;
+          const text = `${item.prompt || ""} ${item.response || ""} ${item.decisionMemo || ""}`.toLowerCase();
+          return (code && text.includes(code)) || (name && text.includes(name));
+        })
+        .sort((a, b) => String(b.date || b.createdAt || "").localeCompare(String(a.date || a.createdAt || "")));
+    }
+
+    function getHoldingReports(holding) {
+      if (!holding) return [];
+      return state.reports
+        .filter((report) => report.holdingId === holding.id || (holding.code && report.holdingCode === holding.code))
+        .sort((a, b) => String(b.importedAt || b.createdAt || "").localeCompare(String(a.importedAt || a.createdAt || "")));
+    }
+
+    function renderHoldingDetail() {
+      const holding = getSelectedDetailHolding();
+      if (!holding) return "";
+
+      const relatedResponses = getRelatedAiResponses(holding);
+      const reports = getHoldingReports(holding);
+
+      return `
+        <section class="card holding-detail">
+          <div class="portfolio-toolbar">
+            <div>
+              <h2>${escapeHtml(holding.code)} ${escapeHtml(holding.name)}</h2>
+              <p class="muted">この銘柄に関連するAI相談履歴と決算資料を確認します。</p>
+            </div>
+            <button class="secondary" onclick="closeHoldingDetail()">閉じる</button>
+          </div>
+
+          <div class="summary">
+            <div>評価額<br><strong>${yen(holding.marketValue)}</strong></div>
+            <div>評価損益<br><strong class="${holding.unrealizedGainLoss >= 0 ? "positive" : "negative"}">${yen(holding.unrealizedGainLoss)}</strong></div>
+            <div>損益率<br><strong class="${holding.gainLossRate >= 0 ? "positive" : "negative"}">${pct(holding.gainLossRate)}</strong></div>
+            <div>関連AI相談<br><strong>${relatedResponses.length}</strong></div>
+          </div>
+
+          <div class="detail-grid">
+            <div class="file-box">
+              <h3>決算資料を読み込む</h3>
+              <p class="muted">TXT、CSV、HTML、JSONなどのテキスト系ファイルは本文を読み込めます。PDFはファイル名とメモの保存を優先します。</p>
+              <input id="holdingReportFile" type="file" accept=".txt,.md,.csv,.html,.json,.pdf,text/*,application/pdf">
+              <label>資料メモ
+                <textarea id="detailReportMemo" placeholder="決算のポイント、確認したい点、PDFの場合の要約メモなど">${escapeHtml(state.detailReportMemo)}</textarea>
+              </label>
+              <button id="saveHoldingReportBtn" ${state.detailReportFileName || state.detailReportMemo ? "" : "disabled"}>この銘柄に保存</button>
+              <p class="muted">${state.detailReportFileName ? `選択中：${escapeHtml(state.detailReportFileName)}` : "ファイル未選択"}</p>
+            </div>
+
+            <div class="file-box">
+              <h3>保存済み決算資料</h3>
+              ${reports.map((report) => `
+                <details class="history-detail">
+                  <summary>${escapeHtml(report.fileName || "資料メモ")}（${escapeHtml(report.importedAt ? new Date(report.importedAt).toLocaleDateString("ja-JP") : "-")}）</summary>
+                  <p><strong>メモ</strong><br>${escapeHtml(report.memo || "未入力")}</p>
+                  <p><strong>読み込み本文</strong><br>${escapeHtml(report.text || "本文なし")}</p>
+                </details>
+              `).join("") || `<p class="muted">保存済み資料はまだありません。</p>`}
+            </div>
+          </div>
+
+          <h3>この銘柄に関連するAI相談履歴</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>保存日</th>
+                  <th>テンプレート</th>
+                  <th>AI回答</th>
+                  <th>判断メモ</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${relatedResponses.map((item) => `
+                  <tr>
+                    <td>${escapeHtml(item.date ? new Date(item.date).toLocaleString("ja-JP") : "-")}</td>
+                    <td>${escapeHtml(getTemplateName(item.templateId))}</td>
+                    <td>
+                      <details class="history-detail">
+                        <summary>回答を見る</summary>
+                        ${escapeHtml(item.response || "未入力")}
+                      </details>
+                    </td>
+                    <td>
+                      <details class="history-detail">
+                        <summary>メモを見る</summary>
+                        ${escapeHtml(item.decisionMemo || "未入力")}
+                      </details>
+                    </td>
+                  </tr>
+                `).join("") || `<tr><td colspan="4">この銘柄に関連するAI相談履歴はまだありません。</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
     }
 
     function renderPortfolioList() {
@@ -1324,6 +1484,60 @@ ${rows || "保有銘柄なし"}
           <button id="saveAiResponseBtn">AI回答と判断メモを保存</button>
         </section>
       `;
+    }
+
+    function getTemplateName(templateId) {
+      const template = PROMPT_TEMPLATES.find((t) => t.id === templateId);
+      return template ? `${template.category}：${template.name}` : (templateId || "未分類");
+    }
+
+    function renderHistory() {
+      const keyword = state.historySearch.trim().toLowerCase();
+      const filtered = state.aiResponses
+        .filter((item) => {
+          const targetText = `${getTemplateName(item.templateId)} ${item.prompt || ""} ${item.response || ""} ${item.decisionMemo || ""}`.toLowerCase();
+          const matchesKeyword = !keyword || targetText.includes(keyword);
+          const matchesTemplate = state.historyTemplate === "all" || item.templateId === state.historyTemplate;
+          return matchesKeyword && matchesTemplate;
+        })
+        .sort((a, b) => String(b.date || b.createdAt || "").localeCompare(String(a.date || a.createdAt || "")));
+
+      const templateCounts = state.aiResponses.reduce((acc, item) => {
+        const key = item.templateId || "未分類";
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+
+      const latestDate = filtered[0]?.date || filtered[0]?.createdAt || "";
+
+      return `<br>        <section class="card"><br>          <h2>AI回答履歴</h2><br>          <p class="muted">AI相談プロンプトで保存した回答と自分の判断メモを、後から検索・集計・確認できます。</p><br><br>          <div class="summary"><br>            <div>保存件数<br><strong>${state.aiResponses.length}</strong></div><br>            <div>表示件数<br><strong>${filtered.length}</strong></div><br>            <div>テンプレート数<br><strong>${Object.keys(templateCounts).length}</strong></div><br>            <div>最新保存日<br><strong>${latestDate ? new Date(latestDate).toLocaleDateString("ja-JP") : "-"}</strong></div><br>          </div><br><br>          <div class="history-controls"><br>            <input id="historySearch" placeholder="回答・判断メモ・プロンプトを検索" value="${escapeHtml(state.historySearch)}"><br>            <select id="historyTemplate"><br>              <option value="all" ${state.historyTemplate === "all" ? "selected" : ""}>すべてのテンプレート</option><br>              ${PROMPT_TEMPLATES.map((t) => `
+                <option value="${t.id}" ${state.historyTemplate === t.id ? "selected" : ""}>${escapeHtml(t.category)}：${escapeHtml(t.name)}（${templateCounts[t.id] || 0}）</option>
+              `).join("")}<br>            </select><br>          </div><br><br>          <h3>テンプレート別集計</h3><br>          <div class="summary"><br>            ${Object.entries(templateCounts).map(([templateId, count]) => `
+              <div>${escapeHtml(getTemplateName(templateId))}<br><strong>${count}</strong></div>
+            `).join("") || `<div>まだ保存履歴がありません。<br><strong>0</strong></div>`}<br>          </div><br><br>          <h3>保存した回答一覧</h3><br>          <div class="table-wrap"><br>            <table><br>              <thead><br>                <tr><br>                  <th>保存日</th><br>                  <th>テンプレート</th><br>                  <th>AI回答</th><br>                  <th>判断メモ</th><br>                  <th>プロンプト</th><br>                </tr><br>              </thead><br>              <tbody><br>                ${filtered.map((item) => `
+                  <tr>
+                    <td>${escapeHtml(item.date ? new Date(item.date).toLocaleString("ja-JP") : "-")}</td>
+                    <td>${escapeHtml(getTemplateName(item.templateId))}</td>
+                    <td>
+                      <details class="history-detail">
+                        <summary>回答を見る</summary>
+                        ${escapeHtml(item.response || "未入力")}
+                      </details>
+                    </td>
+                    <td>
+                      <details class="history-detail">
+                        <summary>メモを見る</summary>
+                        ${escapeHtml(item.decisionMemo || "未入力")}
+                      </details>
+                    </td>
+                    <td>
+                      <details class="history-detail">
+                        <summary>プロンプトを見る</summary>
+                        ${escapeHtml(item.prompt || "未入力")}
+                      </details>
+                    </td>
+                  </tr>
+                `).join("") || `<tr><td colspan="5">保存したAI回答はまだありません。</td></tr>`}<br>              </tbody><br>            </table><br>          </div><br>        </section><br>      `;
     }
 
     function renderGlossary() {
@@ -1484,6 +1698,39 @@ ${rows || "保有銘柄なし"}
         saveAiResponseBtn.addEventListener("click", saveAiResponse);
       }
 
+      const holdingReportFile = document.getElementById("holdingReportFile");
+      if (holdingReportFile) {
+        holdingReportFile.addEventListener("change", handleHoldingReportFile);
+      }
+
+      const detailReportMemo = document.getElementById("detailReportMemo");
+      if (detailReportMemo) {
+        detailReportMemo.addEventListener("input", (event) => {
+          state.detailReportMemo = event.target.value;
+        });
+      }
+
+      const saveHoldingReportBtn = document.getElementById("saveHoldingReportBtn");
+      if (saveHoldingReportBtn) {
+        saveHoldingReportBtn.addEventListener("click", saveHoldingReport);
+      }
+
+      const historySearch = document.getElementById("historySearch");
+      if (historySearch) {
+        historySearch.addEventListener("input", (event) => {
+          state.historySearch = event.target.value;
+          render();
+        });
+      }
+
+      const historyTemplate = document.getElementById("historyTemplate");
+      if (historyTemplate) {
+        historyTemplate.addEventListener("change", (event) => {
+          state.historyTemplate = event.target.value;
+          render();
+        });
+      }
+
       const glossarySearch = document.getElementById("glossarySearch");
       if (glossarySearch) {
         glossarySearch.addEventListener("input", (event) => {
@@ -1509,6 +1756,63 @@ ${rows || "保有銘柄なし"}
     }
 
     // ===== 操作 =====
+    function openHoldingDetail(id) {
+      state.selectedHoldingDetailId = id;
+      state.portfolioView = "list";
+      render();
+    }
+
+    function closeHoldingDetail() {
+      state.selectedHoldingDetailId = "";
+      state.detailReportFileName = "";
+      state.detailReportFileText = "";
+      state.detailReportMemo = "";
+      render();
+    }
+
+    async function handleHoldingReportFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      state.detailReportFileName = file.name;
+      try {
+        if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+          state.detailReportFileText = "";
+        } else {
+          state.detailReportFileText = await file.text();
+        }
+      } catch {
+        state.detailReportFileText = "";
+      }
+      render();
+    }
+
+    async function saveHoldingReport() {
+      const holding = getSelectedDetailHolding();
+      if (!holding) return;
+
+      const saved = await putItem("reports", {
+        id: crypto.randomUUID(),
+        holdingId: holding.id,
+        holdingCode: holding.code,
+        holdingName: holding.name,
+        fileName: state.detailReportFileName,
+        importedAt: new Date().toISOString(),
+        text: state.detailReportFileText,
+        memo: state.detailReportMemo
+      });
+
+      state.reports = [
+        saved,
+        ...state.reports.filter((report) => report.id !== saved.id)
+      ];
+      state.detailReportFileName = "";
+      state.detailReportFileText = "";
+      state.detailReportMemo = "";
+      alert("決算資料を保存しました。");
+      render();
+    }
+
     async function saveHolding() {
       const record = await putItem("holdings", calcHolding(state.holdingForm));
       state.holdings = [
@@ -1598,15 +1902,22 @@ ${rows || "保有銘柄なし"}
     }
 
     async function saveAiResponse() {
-      await putItem("aiResponses", {
+      const saved = await putItem("aiResponses", {
         id: crypto.randomUUID(),
         date: new Date().toISOString(),
         templateId: state.selectedTemplateId,
+        holdingId: state.selectedHoldingId,
+        holdingCode: (state.holdings.find((h) => h.id === state.selectedHoldingId) || {}).code || "",
+        holdingName: (state.holdings.find((h) => h.id === state.selectedHoldingId) || {}).name || "",
         prompt: state.generatedPrompt,
         response: state.aiResponse,
         decisionMemo: state.decisionMemo
       });
 
+      state.aiResponses = [
+        saved,
+        ...state.aiResponses.filter((item) => item.id !== saved.id)
+      ];
       state.aiResponse = "";
       state.decisionMemo = "";
       alert("AI回答と判断メモを保存しました。");
@@ -1654,6 +1965,8 @@ ${rows || "保有銘柄なし"}
 
     async function loadInitialData() {
       state.holdings = await getAll("holdings");
+      state.aiResponses = await getAll("aiResponses");
+      state.reports = await getAll("reports");
       const profiles = await getAll("profile");
       state.profile = profiles[0] || { ...defaultProfile };
     }
